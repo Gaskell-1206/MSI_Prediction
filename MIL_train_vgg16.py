@@ -1,3 +1,5 @@
+import argparse
+from pathlib import Path
 import os
 import urllib.request
 from types import SimpleNamespace
@@ -173,7 +175,7 @@ def main(args):
 
     # Create a PyTorch Lightning trainer with the generation callback
     early_stop_callback = EarlyStopping(
-        monitor="val_accuracy", min_delta=0.00, patience=10,verbose=False, mode="max")
+        monitor="val_acc", patience=10,verbose=False, mode="max")
 
     trainer = pl.Trainer(
         default_root_dir=os.path.join(CHECKPOINT_PATH, save_name),
@@ -216,7 +218,7 @@ if __name__ == "__main__":
         help="root directory of dataset",
     )
     parser.add_argument(
-        "--output",
+        "--output_path",
         type=Path,
         required=True,
         help="output directory",

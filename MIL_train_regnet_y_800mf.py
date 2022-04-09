@@ -73,7 +73,7 @@ class MSI_MSSModule(pl.LightningModule):
 
         self.save_hyperparameters()
         # self.model = create_model(model_name, model_hparams)
-        self.model=models.resnet34(pretrained=True)
+        self.model=models.regnet_y_1_6gf(pretrained=True)
         self.loss_module = nn.CrossEntropyLoss()
 
     def forward(self, imgs):
@@ -163,7 +163,7 @@ def main(args):
     )
 
     # model
-    model_name = "resnet34_normalized"
+    model_name = "regnet_y_1_6gf"
     model_hparams={"num_classes": 2, "act_fn_name": "relu"}
     optimizer_name="Adam",
     optimizer_hparams={"lr": 1e-3, "weight_decay": 1e-4},
@@ -174,8 +174,8 @@ def main(args):
     save_name = model_name
 
     # Create a PyTorch Lightning trainer with the generation callback
-    early_stop_callback = EarlyStopping(
-        monitor="val_acc", min_delta=0.00, patience=10,verbose=False, mode="max")
+    # early_stop_callback = EarlyStopping(
+    #     monitor="val_acc", min_delta=0.00, patience=10,verbose=False, mode="max")
 
     trainer = pl.Trainer(
         default_root_dir=os.path.join(CHECKPOINT_PATH, save_name),
@@ -183,7 +183,7 @@ def main(args):
         min_epochs=10,
         max_epochs=args.nepochs,
         callbacks=[ModelCheckpoint(save_weights_only=True, mode="max", monitor="val_acc"), 
-        LearningRateMonitor("epoch"),early_stop_callback],
+        LearningRateMonitor("epoch")],
         # auto_scale_batch_size='binsearch', # [Optional] auto_scale_batch_size
         auto_lr_find=True
     ) 

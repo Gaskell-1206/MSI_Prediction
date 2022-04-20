@@ -1,4 +1,4 @@
-import sys
+MIL_train_resnet18_MIL_CPU.pyimport sys
 import argparse
 import random
 from pathlib import Path
@@ -351,7 +351,7 @@ class Lite(LightningLite):
 
 
 def main():
-    lite = Lite(accelerator="gpu", devices=4)
+    lite = Lite(accelerator="cpu", devices=4)
     lite.run(learning_rate=1e-4)
 
 

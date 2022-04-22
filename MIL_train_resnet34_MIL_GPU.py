@@ -37,9 +37,9 @@ class Args:
     batch_size = 128
     nepochs = 50
     num_workers = 2
-    test_every = 1
+    test_every = 5
     weights = 0.5
-    k = 2
+    k = 1
 
 parser = argparse.ArgumentParser(
     formatter_class=argparse.ArgumentDefaultsHelpFormatter
@@ -106,8 +106,8 @@ def inference(run, loader, model):
     probs = torch.FloatTensor(len(loader.dataset))
     with torch.no_grad():
         for i, input in enumerate(loader):
-            # print(
-            #     'Inference\tEpoch: [{}/{}]\tBatch: [{}/{}]'.format(run+1, args.nepochs, i+1, len(loader)))
+            print(
+                'Inference\tEpoch: [{}/{}]\tBatch: [{}/{}]'.format(run+1, args.nepochs, i+1, len(loader)))
             output = F.softmax(model(input), dim=1)
             probs[i*args.batch_size:i*args.batch_size +
                 input.size(0)] = output.detach()[:, 1].clone()
@@ -131,13 +131,11 @@ def train(run, loader, model, criterion, optimizer):
 def calc_err(pred, real):
     pred = np.array(pred)
     real = np.array(real)
-    pos = np.equal(pred, real)
     neq = np.not_equal(pred, real)
-    acc = float(pos.sum())/pred.shape[0]
     err = float(neq.sum())/pred.shape[0]
     fpr = float(np.logical_and(pred == 1, neq).sum())/(real == 0).sum()
     fnr = float(np.logical_and(pred == 0, neq).sum())/(real == 1).sum()
-    return acc, err, fpr, fnr
+    return err, fpr, fnr
 
 
 def group_argtopk(groups, data, k=1):
@@ -253,10 +251,11 @@ class Lite(LightningLite):
     def run(self, learning_rate):
         global args, best_acc
         args = parser.parse_args()
+        print(args)
         # args = Args()
         self.seed_everything(2022)
 
-        model = models.resnet18(pretrained=True)
+        model = models.resnet34(pretrained=True)
         model.fc = nn.Linear(model.fc.in_features, 2)
         optimizer = torch.optim.SGD(
             model.parameters(), lr=learning_rate, weight_decay=1e-4)
@@ -282,11 +281,11 @@ class Lite(LightningLite):
             transforms.Normalize(DATA_MEANS, DATA_STD)])
 
         train_dataset = MILdataset(
-            args.lib_dir, args.root_dir, 'Train', transform=train_transform, subset_rate=0.001)
+            args.lib_dir, args.root_dir, 'Train', transform=train_transform, subset_rate=1)
         val_dataset = MILdataset(
-            args.lib_dir, args.root_dir, 'Val', transform=test_transform, subset_rate=0.001)
+            args.lib_dir, args.root_dir, 'Val', transform=test_transform, subset_rate=1)
         test_dataset = MILdataset(
-            args.lib_dir, args.root_dir, 'Test', transform=test_transform, subset_rate=0.001)
+            args.lib_dir, args.root_dir, 'Test', transform=test_transform, subset_rate=1)
 
         train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size,
                                       shuffle=False, num_workers=args.num_workers, pin_memory=True)
@@ -298,19 +297,20 @@ class Lite(LightningLite):
             train_dataloader, val_dataloader, test_dataloader, move_to_device=True)
 
         # open output file
-        fconv=open(os.path.join(args.output_path, 'convergence.csv'), 'w')
+        fconv = open(os.path.join(args.output_path, 'convergence.csv'), 'w')
         fconv.write('epoch,metric,value\n')
         fconv.close()
 
         for epoch in tqdm(range(args.nepochs)):
             train_dataset.setmode(1)
-            print("train_set_len:", len(train_dataloader.dataset))
+            # print("train_set_len:", len(train_dataloader.dataset))
             probs = inference(epoch, train_dataloader, model)
             # return the indices of topk tile(s) in each slides
-            topk = group_argtopk(np.array(train_dataset.slideIDX), probs, args.k)
+            topk = group_argtopk(
+                np.array(train_dataset.slideIDX), probs, args.k)
             train_dataset.maketraindata(topk)
             train_dataset.shuffletraindata()
-            train_dataset.setmode(2)
+            # train_dataset.setmode(2)
 
             model.train()
             running_loss = 0.
@@ -322,7 +322,8 @@ class Lite(LightningLite):
                 optimizer.step()
                 running_loss += loss.item()*input.size(0)
             batch_loss = running_loss/len(train_dataloader.dataset)
-            print('Training\tEpoch: [{}/{}]\tLoss: {}'.format(epoch+1, args.nepochs, batch_loss))
+            print(
+                'Training\tEpoch: [{}/{}]\tLoss: {}'.format(epoch+1, args.nepochs, batch_loss))
             fconv = open(os.path.join(
                 args.output_path, 'convergence.csv'), 'a')
             fconv.write('{},loss,{}\n'.format(epoch+1, loss))
@@ -332,23 +333,20 @@ class Lite(LightningLite):
             if (epoch+1) % args.test_every == 0:
                 val_dataset.setmode(1)
                 probs = inference(epoch, val_dataloader, model)
-                maxs = group_max(np.array(val_dataset.slideIDX),probs, len(val_dataset.targets))
+                maxs = group_max(np.array(val_dataset.slideIDX), probs, len(val_dataset.targets))
                 pred = [1 if x >= 0.5 else 0 for x in maxs]
-                print(f"pred in epoch{epoch}:{pred}")
-                print(f"target in epoch{epoch}:{val_dataset.targets}")
-                acc, err, fpr, fnr = calc_err(pred, val_dataset.targets)
+                # print(f"pred in epoch{epoch}:{pred}")
+                # print(f"target in epoch{epoch}:{val_dataset.targets}")
+                err, fpr, fnr = calc_err(pred, val_dataset.targets)
 
-                print('Validation\tEpoch: [{}/{}]\t ACC: {}\tError: {}\tFPR: {}\tFNR: {}'.format(
-                    epoch+1, args.nepochs, acc, err, fpr, fnr))
+                print('Validation\tEpoch: [{}/{}]\tError: {}\tFPR: {}\tFNR: {}'.format(
+                    epoch+1, args.nepochs, err, fpr, fnr))
                 fconv = open(os.path.join(
                     args.output_path, 'convergence.csv'), 'a')
-
-                fconv.write('{},acc,{}\n'.format(epoch+1, acc))    
                 fconv.write('{},error,{}\n'.format(epoch+1, err))
                 fconv.write('{},fpr,{}\n'.format(epoch+1, fpr))
                 fconv.write('{},fnr,{}\n'.format(epoch+1, fnr))
                 fconv.close()
-
                 # Save best model
                 err = (fpr+fnr)/2.
                 if 1-err >= best_acc:

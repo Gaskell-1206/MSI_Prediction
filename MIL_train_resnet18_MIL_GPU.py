@@ -251,6 +251,7 @@ class Lite(LightningLite):
     def run(self, learning_rate):
         global args, best_acc
         args = parser.parse_args()
+        print(args)
         # args = Args()
         self.seed_everything(2022)
 

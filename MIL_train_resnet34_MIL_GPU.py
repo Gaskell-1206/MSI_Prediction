@@ -39,7 +39,7 @@ class Args:
     num_workers = 2
     test_every = 5
     weights = 0.5
-    k = 2
+    k = 1
 
 parser = argparse.ArgumentParser(
     formatter_class=argparse.ArgumentDefaultsHelpFormatter
@@ -106,8 +106,8 @@ def inference(run, loader, model):
     probs = torch.FloatTensor(len(loader.dataset))
     with torch.no_grad():
         for i, input in enumerate(loader):
-            # print(
-            #     'Inference\tEpoch: [{}/{}]\tBatch: [{}/{}]'.format(run+1, args.nepochs, i+1, len(loader)))
+            print(
+                'Inference\tEpoch: [{}/{}]\tBatch: [{}/{}]'.format(run+1, args.nepochs, i+1, len(loader)))
             output = F.softmax(model(input), dim=1)
             probs[i*args.batch_size:i*args.batch_size +
                 input.size(0)] = output.detach()[:, 1].clone()
@@ -251,10 +251,11 @@ class Lite(LightningLite):
     def run(self, learning_rate):
         global args, best_acc
         args = parser.parse_args()
+        print(args)
         # args = Args()
         self.seed_everything(2022)
 
-        model = models.resnet18(pretrained=True)
+        model = models.resnet34(pretrained=True)
         model.fc = nn.Linear(model.fc.in_features, 2)
         optimizer = torch.optim.SGD(
             model.parameters(), lr=learning_rate, weight_decay=1e-4)
@@ -280,11 +281,11 @@ class Lite(LightningLite):
             transforms.Normalize(DATA_MEANS, DATA_STD)])
 
         train_dataset = MILdataset(
-            args.lib_dir, args.root_dir, 'Train', transform=train_transform, subset_rate=0.01)
+            args.lib_dir, args.root_dir, 'Train', transform=train_transform, subset_rate=1)
         val_dataset = MILdataset(
-            args.lib_dir, args.root_dir, 'Val', transform=test_transform, subset_rate=0.1)
+            args.lib_dir, args.root_dir, 'Val', transform=test_transform, subset_rate=1)
         test_dataset = MILdataset(
-            args.lib_dir, args.root_dir, 'Test', transform=test_transform, subset_rate=0.1)
+            args.lib_dir, args.root_dir, 'Test', transform=test_transform, subset_rate=1)
 
         train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size,
                                       shuffle=False, num_workers=args.num_workers, pin_memory=True)
@@ -302,14 +303,14 @@ class Lite(LightningLite):
 
         for epoch in tqdm(range(args.nepochs)):
             train_dataset.setmode(1)
-            print("train_set_len:", len(train_dataloader.dataset))
+            # print("train_set_len:", len(train_dataloader.dataset))
             probs = inference(epoch, train_dataloader, model)
             # return the indices of topk tile(s) in each slides
             topk = group_argtopk(
                 np.array(train_dataset.slideIDX), probs, args.k)
             train_dataset.maketraindata(topk)
             train_dataset.shuffletraindata()
-            train_dataset.setmode(2)
+            # train_dataset.setmode(2)
 
             model.train()
             running_loss = 0.
@@ -332,11 +333,10 @@ class Lite(LightningLite):
             if (epoch+1) % args.test_every == 0:
                 val_dataset.setmode(1)
                 probs = inference(epoch, val_dataloader, model)
-                maxs = group_max(np.array(val_dataset.slideIDX),
-                                 probs, len(val_dataset.targets))
+                maxs = group_max(np.array(val_dataset.slideIDX), probs, len(val_dataset.targets))
                 pred = [1 if x >= 0.5 else 0 for x in maxs]
-                print(f"pred in epoch{epoch}:{pred}")
-                print(f"target in epoch{epoch}:{val_dataset.targets}")
+                # print(f"pred in epoch{epoch}:{pred}")
+                # print(f"target in epoch{epoch}:{val_dataset.targets}")
                 err, fpr, fnr = calc_err(pred, val_dataset.targets)
 
                 print('Validation\tEpoch: [{}/{}]\tError: {}\tFPR: {}\tFNR: {}'.format(

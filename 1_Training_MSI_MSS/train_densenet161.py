@@ -68,7 +68,7 @@ class MSI_MSSModule(pl.LightningModule):
 
         self.save_hyperparameters()
         # self.model = create_model(model_name, model_hparams)
-        self.model = models.resnet34(pretrained=True)
+        self.model = models.densenet161(pretrained=True)
         self.loss_module = nn.CrossEntropyLoss()
 
     def forward(self, imgs):
@@ -162,7 +162,7 @@ def main(args):
     )
 
     # model
-    model_name = "resnet34"
+    model_name = "densenet161"
     model_hparams = {"num_classes": 2, "act_fn_name": "relu"}
     optimizer_name = "Adam",
     optimizer_hparams = {"lr": 1e-3, "weight_decay": 1e-4},

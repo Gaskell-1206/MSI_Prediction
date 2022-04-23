@@ -1,29 +1,21 @@
 import argparse
-from pathlib import Path
 import os
-import urllib.request
+from pathlib import Path
 from types import SimpleNamespace
+from typing import Callable, Optional, Union
 from urllib.error import HTTPError
-# import matplotlib
-# import matplotlib.pyplot as plt
 import numpy as np
 import pytorch_lightning as pl
-# import seaborn as sns
-# import tabulate
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.utils.data as data
 import torchvision
 import torchvision.models as models
-
-# from IPython.display import HTML, display, set_matplotlib_formats
 from PIL import Image
-from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint, EarlyStopping
+from pytorch_lightning.callbacks import (EarlyStopping, LearningRateMonitor,
+                                         ModelCheckpoint)
 from torchvision import transforms
-from typing import Callable, Union, Optional
-import urllib.request
-import ssl
 
 
 class MSS_MSI_DataModule(pl.LightningDataModule):
@@ -47,23 +39,26 @@ class MSS_MSI_DataModule(pl.LightningDataModule):
 
     def train_dataloader(self):
         train_path = os.path.join(self.data_path, "CRC_DX_Train")
-        train_dataset = torchvision.datasets.ImageFolder(train_path, self.train_transform)
+        train_dataset = torchvision.datasets.ImageFolder(
+            train_path, self.train_transform)
         train_DataLoader = data.DataLoader(train_dataset, batch_size=self.batch_size, shuffle=True,
-                                      num_workers=self.num_workers, pin_memory=True)
+                                           num_workers=self.num_workers, pin_memory=True)
         return train_DataLoader
 
     def val_dataloader(self):
         train_path = os.path.join(self.data_path, "CRC_DX_Val")
-        val_dataset = torchvision.datasets.ImageFolder(train_path, self.val_transform)
+        val_dataset = torchvision.datasets.ImageFolder(
+            train_path, self.val_transform)
         val_DataLoader = data.DataLoader(val_dataset, batch_size=self.batch_size, shuffle=False,
-                                    num_workers=self.num_workers, pin_memory=True)
+                                         num_workers=self.num_workers, pin_memory=True)
         return val_DataLoader
 
     def test_dataloader(self):
         train_path = os.path.join(self.data_path, "CRC_DX_Test")
-        test_dataset = torchvision.datasets.ImageFolder(train_path, self.test_transform)
+        test_dataset = torchvision.datasets.ImageFolder(
+            train_path, self.test_transform)
         test_DataLoader = data.DataLoader(test_dataset, batch_size=self.batch_size, shuffle=False,
-                                     num_workers=self.num_workers, pin_memory=True)
+                                          num_workers=self.num_workers, pin_memory=True)
         return test_DataLoader
 
 
@@ -73,7 +68,7 @@ class MSI_MSSModule(pl.LightningModule):
 
         self.save_hyperparameters()
         # self.model = create_model(model_name, model_hparams)
-        self.model=models.densenet161(pretrained=True)
+        self.model = models.vgg16_bn(pretrained=True)
         self.loss_module = nn.CrossEntropyLoss()
 
     def forward(self, imgs):
@@ -81,9 +76,11 @@ class MSI_MSSModule(pl.LightningModule):
 
     def configure_optimizers(self):
         if self.hparams.optimizer_name[0] == "Adam":
-            optimizer = optim.AdamW(self.parameters(),**self.hparams.optimizer_hparams[0])
+            optimizer = optim.AdamW(
+                self.parameters(), **self.hparams.optimizer_hparams[0])
         elif self.hparams.optimizer_name[0] == "SGD":
-            optimizer = optim.SGD(self.parameters(), **self.hparams.optimizer_hparams[0])
+            optimizer = optim.SGD(self.parameters(), **
+                                  self.hparams.optimizer_hparams[0])
         else:
             assert False, f'Unknown optimizer: "{self.hparams.optimizer_name}"'
         # Reduce the learning rate by 0.1 after 100 and 150 epochs
@@ -126,24 +123,25 @@ def create_model(model_name, model_hparams):
 
 
 def main(args):
-    # args = Args()
-    ssl._create_default_https_context = ssl._create_unverified_context
-    #Environment
+    # Environment
     DATASET_PATH = os.environ.get("PATH_DATASETS", "data/")
-    CHECKPOINT_PATH = os.environ.get("PATH_CHECKPOINT", "saved_models/ConvNets")
+    CHECKPOINT_PATH = os.environ.get(
+        "PATH_CHECKPOINT", "saved_models/ConvNets")
     pl.seed_everything(42)
 
     torch.backends.cudnn.determinstic = True
     torch.backends.cudnn.benchmark = False
 
-    device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
+    print(args)
+
+    device = torch.device(
+        "cuda:0") if torch.cuda.is_available() else torch.device("cpu")
 
     # data
-    train_dataset = torchvision.datasets.ImageFolder(os.path.join(args.root_dir,"CRC_DX_Train"))
     DATA_MEANS = [0.485, 0.456, 0.406]
     DATA_STD = [0.229, 0.224, 0.225]
-    print("Data mean", DATA_MEANS)
-    print("Data std", DATA_STD)
+    # print("Data mean", DATA_MEANS)
+    # print("Data std", DATA_STD)
     train_transform = transforms.Compose(
         [
             transforms.RandomHorizontalFlip(),
@@ -151,7 +149,8 @@ def main(args):
             transforms.Normalize(DATA_MEANS, DATA_STD)
         ]
     )
-    test_transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(DATA_MEANS, DATA_STD)])
+    test_transform = transforms.Compose(
+        [transforms.ToTensor(), transforms.Normalize(DATA_MEANS, DATA_STD)])
 
     data_module = MSS_MSI_DataModule(
         data_path=args.root_dir,
@@ -163,45 +162,50 @@ def main(args):
     )
 
     # model
-    model_name = "densenet161"
-    model_hparams={"num_classes": 2, "act_fn_name": "relu"}
-    optimizer_name="Adam",
-    optimizer_hparams={"lr": 1e-3, "weight_decay": 1e-4},
-    model = MSI_MSSModule(model_name, model_hparams, optimizer_name, optimizer_hparams)
+    model_name = "vgg16_bn"
+    model_hparams = {"num_classes": 2, "act_fn_name": "relu"}
+    optimizer_name = "Adam",
+    optimizer_hparams = {"lr": 1e-3, "weight_decay": 1e-4},
+    model = MSI_MSSModule(model_name, model_hparams,
+                          optimizer_name, optimizer_hparams)
 
     # training
-    
+
     save_name = model_name
 
     # Create a PyTorch Lightning trainer with the generation callback
-    early_stop_callback = EarlyStopping(
-        monitor="val_acc", min_delta=0.00, patience=10,verbose=False, mode="max")
+    # early_stop_callback = EarlyStopping(
+    #     monitor="val_acc", min_delta=0.00, patience=10,verbose=False, mode="max")
 
     trainer = pl.Trainer(
         default_root_dir=os.path.join(CHECKPOINT_PATH, save_name),
         gpus=1 if str(device) == "cuda:0" else 0,
         min_epochs=10,
         max_epochs=args.nepochs,
-        callbacks=[ModelCheckpoint(save_weights_only=True, mode="max", monitor="val_acc"), 
-        LearningRateMonitor("epoch"),early_stop_callback],
+        callbacks=[ModelCheckpoint(save_weights_only=True, mode="max", monitor="val_acc"),
+                   LearningRateMonitor("epoch")],
         # auto_scale_batch_size='binsearch', # [Optional] auto_scale_batch_size
         auto_lr_find=True
-    ) 
-    trainer.logger._log_graph = True  # If True, we plot the computation graph in tensorboard
-    trainer.logger._default_hp_metric = None  # Optional logging argument that we don't need
+    )
+    # If True, we plot the computation graph in tensorboard
+    trainer.logger._log_graph = True
+    # Optional logging argument that we don't need
+    trainer.logger._default_hp_metric = None
 
     # [Optional] lr_finder
-    lr_finder = trainer.tuner.lr_find(model,datamodule=data_module)
+    lr_finder = trainer.tuner.lr_find(model, datamodule=data_module)
     # fig = lr_finder.plot(suggest=True)
     # fig.show()
 
     model.hparams.learning_rate = lr_finder.suggestion()
+    print("suggested_learning_rate:", lr_finder.suggestion())
 
     # fit
     trainer.fit(model, datamodule=data_module)
 
     # Test best model on test set
-    model = MSI_MSSModule.load_from_checkpoint(trainer.checkpoint_callback.best_model_path) 
+    model = MSI_MSSModule.load_from_checkpoint(
+        trainer.checkpoint_callback.best_model_path)
     test_result = trainer.test(model, datamodule=data_module, verbose=True)
     result = {"test": test_result[0]["test_acc"]}
     print(result)

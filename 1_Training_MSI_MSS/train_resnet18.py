@@ -126,8 +126,6 @@ def create_model(model_name, model_hparams):
 
 
 def main(args):
-    # args = Args()
-    ssl._create_default_https_context = ssl._create_unverified_context
     #Environment
     DATASET_PATH = os.environ.get("PATH_DATASETS", "data/")
     CHECKPOINT_PATH = os.environ.get("PATH_CHECKPOINT", "saved_models/ConvNets")
@@ -136,14 +134,15 @@ def main(args):
     torch.backends.cudnn.determinstic = True
     torch.backends.cudnn.benchmark = False
 
+    print(args)
+
     device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
 
     # data
-    train_dataset = torchvision.datasets.ImageFolder(os.path.join(args.root_dir,"CRC_DX_Train"))
     DATA_MEANS = [0.485, 0.456, 0.406]
     DATA_STD = [0.229, 0.224, 0.225]
-    print("Data mean", DATA_MEANS)
-    print("Data std", DATA_STD)
+    # print("Data mean", DATA_MEANS)
+    # print("Data std", DATA_STD)
     train_transform = transforms.Compose(
         [
             transforms.RandomHorizontalFlip(),
@@ -163,7 +162,7 @@ def main(args):
     )
 
     # model
-    model_name = "resnet18_normalized"
+    model_name = "resnet18"
     model_hparams={"num_classes": 2, "act_fn_name": "relu"}
     optimizer_name="Adam",
     optimizer_hparams={"lr": 1e-3, "weight_decay": 1e-4},
@@ -174,8 +173,8 @@ def main(args):
     save_name = model_name
 
     # Create a PyTorch Lightning trainer with the generation callback
-    early_stop_callback = EarlyStopping(
-        monitor="val_acc", min_delta=0.00, patience=10,verbose=False, mode="max")
+    # early_stop_callback = EarlyStopping(
+    #     monitor="val_acc", min_delta=0.00, patience=10,verbose=False, mode="max")
 
     trainer = pl.Trainer(
         default_root_dir=os.path.join(CHECKPOINT_PATH, save_name),
@@ -183,7 +182,7 @@ def main(args):
         min_epochs=10,
         max_epochs=args.nepochs,
         callbacks=[ModelCheckpoint(save_weights_only=True, mode="max", monitor="val_acc"), 
-        LearningRateMonitor("epoch"),early_stop_callback],
+        LearningRateMonitor("epoch")],
         # auto_scale_batch_size='binsearch', # [Optional] auto_scale_batch_size
         auto_lr_find=True
     ) 
@@ -196,6 +195,7 @@ def main(args):
     # fig.show()
 
     model.hparams.learning_rate = lr_finder.suggestion()
+    print("suggested_learning_rate:",lr_finder.suggestion())
 
     # fit
     trainer.fit(model, datamodule=data_module)

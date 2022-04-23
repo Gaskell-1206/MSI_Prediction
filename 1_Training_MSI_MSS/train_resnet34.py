@@ -126,8 +126,6 @@ def create_model(model_name, model_hparams):
 
 
 def main(args):
-    # args = Args()
-    ssl._create_default_https_context = ssl._create_unverified_context
     #Environment
     DATASET_PATH = os.environ.get("PATH_DATASETS", "data/")
     CHECKPOINT_PATH = os.environ.get("PATH_CHECKPOINT", "saved_models/ConvNets")
@@ -136,14 +134,15 @@ def main(args):
     torch.backends.cudnn.determinstic = True
     torch.backends.cudnn.benchmark = False
 
+    print(args)
+
     device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
 
     # data
-    train_dataset = torchvision.datasets.ImageFolder(os.path.join(args.root_dir,"CRC_DX_Train"))
     DATA_MEANS = [0.485, 0.456, 0.406]
     DATA_STD = [0.229, 0.224, 0.225]
-    print("Data mean", DATA_MEANS)
-    print("Data std", DATA_STD)
+    # print("Data mean", DATA_MEANS)
+    # print("Data std", DATA_STD)
     train_transform = transforms.Compose(
         [
             transforms.RandomHorizontalFlip(),
@@ -196,6 +195,7 @@ def main(args):
     # fig.show()
 
     model.hparams.learning_rate = lr_finder.suggestion()
+    print("suggested_learning_rate:",lr_finder.suggestion())
 
     # fit
     trainer.fit(model, datamodule=data_module)

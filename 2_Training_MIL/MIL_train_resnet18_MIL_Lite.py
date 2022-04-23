@@ -1,36 +1,47 @@
+from datetime import datetime
 import sys
 import argparse
 import random
+import time
 from pathlib import Path
 import os
-import urllib.request
 from types import SimpleNamespace
 from urllib.error import HTTPError
-# from matplotlib.style import library
 import pandas as pd
 import numpy as np
 from skimage import io
 import pytorch_lightning as pl
 from pytorch_lightning.lite import LightningLite
+from pytorch_lightning.loops import Loop
 import torch
 import torch.nn as nn
-import torch.optim as optim
 from torch.utils.data import DataLoader, Dataset
 import torchvision
 import torchvision.models as models
 import torch.nn.functional as F
 from sklearn.preprocessing import LabelEncoder
 from tqdm import tqdm
+from typing import Callable, Union, Optional
 
 # from IPython.display import HTML, display, set_matplotlib_formats
 from PIL import Image
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint, EarlyStopping
 from torchvision import transforms
-from typing import Callable, Union, Optional
 import urllib.request
 # import ssl
 
 best_acc = 0
+
+class Args:
+    root_dir = '/Users/gaskell/Dropbox/Mac/Desktop/CBH/ex_data/CRC_DX_data_set/Dataset'
+    lib_dir = '/Users/gaskell/Dropbox/Mac/Desktop/CBH/ex_data/CRC_DX_data_set/CRC_DX_Lib'
+    output_path = '/Users/gaskell/Dropbox/Mac/Desktop/CBH/ex_data/CRC_DX_data_set/Output'
+    batch_size = 128
+    nepochs = 10
+    num_workers = 4
+    test_every = 10
+    weights = 0.5
+    k = 1
 
 parser = argparse.ArgumentParser(
     formatter_class=argparse.ArgumentDefaultsHelpFormatter
@@ -92,19 +103,17 @@ parser.add_argument(
     help="top k tiles are assumed to be of the same class as the slide (default: 1, standard MIL)",
 )
 
-
 def inference(run, loader, model):
     model.eval()
     probs = torch.FloatTensor(len(loader.dataset))
     with torch.no_grad():
         for i, input in enumerate(loader):
-            print(
-                'Inference\tEpoch: [{}/{}]\tBatch: [{}/{}]'.format(run+1, args.nepochs, i+1, len(loader)))
+            # print(
+            #     'Inference\tEpoch: [{}/{}]\tBatch: [{}/{}]'.format(run+1, args.nepochs, i+1, len(loader)))
             output = F.softmax(model(input), dim=1)
             probs[i*args.batch_size:i*args.batch_size +
-                  input.size(0)] = output.detach()[:, 1].clone()
+                input.size(0)] = output.detach()[:, 1].clone()
     return probs.cpu().numpy()
-
 
 def train(run, loader, model, criterion, optimizer):
     model.train()
@@ -124,21 +133,24 @@ def train(run, loader, model, criterion, optimizer):
 def calc_err(pred, real):
     pred = np.array(pred)
     real = np.array(real)
+    pos = np.equal(pred, real)
     neq = np.not_equal(pred, real)
+    acc = float(pos.sum())/pred.shape[0]
     err = float(neq.sum())/pred.shape[0]
     fpr = float(np.logical_and(pred == 1, neq).sum())/(real == 0).sum()
     fnr = float(np.logical_and(pred == 0, neq).sum())/(real == 1).sum()
-    return err, fpr, fnr
+    return acc, err, fpr, fnr
 
 
 def group_argtopk(groups, data, k=1):
+    # groups in slide, data is prob of each tile
     order = np.lexsort((data, groups))
     groups = groups[order]
     data = data[order]
     index = np.empty(len(groups), 'bool')
     index[-k:] = True
     index[:-k] = groups[k:] != groups[:-k]
-    return list(order[index])
+    return list(order[index])  # output top prob tile index in each slide
 
 
 def group_max(groups, data, nmax):
@@ -155,11 +167,15 @@ def group_max(groups, data, nmax):
 
 
 class MILdataset(Dataset):
-    def __init__(self, libraryfile_dir='', root_dir='', dataset_mode='Train', transform=None):
+    def __init__(self, libraryfile_dir='', root_dir='', dataset_mode='Train', transform=None, subset_rate=None):
         libraryfile_path = os.path.join(
             libraryfile_dir, f'CRC_DX_{dataset_mode}_ALL.csv')
         lib = pd.read_csv(libraryfile_path)
+        lib = lib if subset_rate is None else lib.sample(
+            frac=subset_rate, random_state=2022)
         lib = lib.sort_values(['subject_id'], ignore_index=True)
+        lib.to_csv(os.path.join(libraryfile_dir,
+                   f'{dataset_mode}_temporary.csv'))
         slides = []
         for i, name in enumerate(lib['subject_id'].unique()):
             sys.stdout.write(
@@ -179,7 +195,7 @@ class MILdataset(Dataset):
         self.dataframe = self.load_data_and_get_class(lib)
         self.slidenames = list(lib['subject_id'].values)
         self.slides = slides
-        self.targets = list(lib['label'].values)
+        self.targets = self.dataframe['Class']
         self.grid = grid
         self.slideIDX = slideIDX
         self.transform = transform
@@ -191,15 +207,14 @@ class MILdataset(Dataset):
 
     def maketraindata(self, idxs):
         self.t_data = [(self.slideIDX[x], self.grid[x],
-                        self.targets[self.slideIDX[x]]) for x in idxs]
+                        self.targets[x]) for x in idxs]
 
     def shuffletraindata(self):
         self.t_data = random.sample(self.t_data, len(self.t_data))
 
     def load_data_and_get_class(self, df):
-        encoder = LabelEncoder()
-        encoder.fit(["MSI", "MSS"])
-        df['Class'] = encoder.transform(df['label'])
+        df.loc[df['label']=='MSI', 'Class'] = 1
+        df.loc[df['label']=='MSS', 'Class'] = 0
         return df
 
     def __getitem__(self, index):
@@ -208,49 +223,39 @@ class MILdataset(Dataset):
             tile_id = self.grid[index]
             slide_id = self.slides[slideIDX]
             img_name = "blk-{}-{}.png".format(tile_id, slide_id)
-            target = self.dataframe.loc[index, 'Class']
-            label = 'CRC_DX_MSIMUT' if target == 0 else 'CRC_DX_MSS'
+            target = self.targets[index]
+            label = 'CRC_DX_MSIMUT' if target == 1 else 'CRC_DX_MSS'
             img_path = os.path.join(self.root_dir, self.dset, label, img_name)
-            img = io.imread(img_path).astype('float')
-            img = img.transpose(2, 0, 1)
+            img = io.imread(img_path)
+            if self.transform is not None:
+                img = self.transform(img)
             return img
         elif self.mode == 2:
             slideIDX, tile_id, target = self.t_data[index]
             slide_id = self.slides[slideIDX]
-            label = 'CRC_DX_MSIMUT' if target == 0 else 'CRC_DX_MSS'
+            label = 'CRC_DX_MSIMUT' if target == 1 else 'CRC_DX_MSS'
             img_name = "blk-{}-{}.png".format(tile_id, slide_id)
             img_path = os.path.join(self.root_dir, self.dset, label, img_name)
-            img = io.imread(img_path).astype('float')
-            img = img.transpose(2, 0, 1)
+            img = io.imread(img_path)
 
         if self.transform is not None:
             img = self.transform(img)
         return img, target
 
     def __len__(self):
-        return len(self.dataframe)
-
-
-class Args:
-    root_dir = '/Users/gaskell/Dropbox/Mac/Desktop/CBH/ex_data/CRC_DX_data_set/Dataset'
-    lib_dir = '/Users/gaskell/Dropbox/Mac/Desktop/CBH/ex_data/CRC_DX_data_set/CRC_DX_Lib'
-    output_path = '/Users/gaskell/Dropbox/Mac/Desktop/CBH/ex_data/CRC_DX_data_set/Output'
-    batch_size = 128
-    nepochs = 1
-    num_workers = 4
-    test_every = 10
-    weights = 0.5
-    k = 1
-
+        if self.mode == 1:
+            return len(self.grid)
+        elif self.mode == 2:
+            return len(self.t_data)
 
 class Lite(LightningLite):
 
     def run(self, learning_rate):
         global args, best_acc
-        args = parser.parse_args()
-        # args = Args()
+        # args = parser.parse_args()
+        args = Args()
         self.seed_everything(2022)
-
+        model_name = "resnet18"
         model = models.resnet18(pretrained=True)
         model.fc = nn.Linear(model.fc.in_features, 2)
         optimizer = torch.optim.SGD(
@@ -267,21 +272,21 @@ class Lite(LightningLite):
         DATA_STD = [0.229, 0.224, 0.225]
 
         train_transform = transforms.Compose([
-            transforms.ToTensor(), 
             transforms.ToPILImage(),
-            transforms.RandomHorizontalFlip(), 
+            transforms.ToTensor(),
+            transforms.RandomHorizontalFlip(),
             transforms.Normalize(DATA_MEANS, DATA_STD)])
         test_transform = transforms.Compose([
-            transforms.ToTensor(),
             transforms.ToPILImage(),
+            transforms.ToTensor(),
             transforms.Normalize(DATA_MEANS, DATA_STD)])
 
         train_dataset = MILdataset(
-            args.lib_dir, args.root_dir, 'Train', transform=train_transform)
+            args.lib_dir, args.root_dir, 'Train', transform=train_transform, subset_rate=0.001)
         val_dataset = MILdataset(
-            args.lib_dir, args.root_dir, 'Val', transform=test_transform)
+            args.lib_dir, args.root_dir, 'Val', transform=test_transform, subset_rate=0.001)
         test_dataset = MILdataset(
-            args.lib_dir, args.root_dir, 'Test', transform=test_transform)
+            args.lib_dir, args.root_dir, 'Test', transform=test_transform, subset_rate=0.001)
 
         train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size,
                                       shuffle=False, num_workers=args.num_workers, pin_memory=True)
@@ -292,16 +297,17 @@ class Lite(LightningLite):
         train_dataloader, val_dataloader, test_dataloader = self.setup_dataloaders(
             train_dataloader, val_dataloader, test_dataloader, move_to_device=True)
 
-        #open output file
-        fconv = open(os.path.join(args.output_path,'convergence.csv'), 'w')
+        # open output file
+        fconv=open(os.path.join(args.output_path, f'{random.getrandbits(8)}_prob_output_{model_name}.csv'), 'w')
         fconv.write('epoch,metric,value\n')
         fconv.close()
 
-        for epoch in tqdm(args.nepochs):
+        for epoch in tqdm(range(args.nepochs)):
             train_dataset.setmode(1)
+            print("train_set_len:", len(train_dataloader.dataset))
             probs = inference(epoch, train_dataloader, model)
+            # return the indices of topk tile(s) in each slides
             topk = group_argtopk(np.array(train_dataset.slideIDX), probs, args.k)
-            print(f"topk in epoch{epoch}:{topk}")
             train_dataset.maketraindata(topk)
             train_dataset.shuffletraindata()
             train_dataset.setmode(2)
@@ -310,34 +316,41 @@ class Lite(LightningLite):
             running_loss = 0.
             for i, (input, target) in enumerate(train_dataloader):
                 output = model(input)
-                loss = criterion(output, target)
+                loss = criterion(output, target.long())
                 optimizer.zero_grad()
                 self.backward(loss)
                 optimizer.step()
                 running_loss += loss.item()*input.size(0)
             batch_loss = running_loss/len(train_dataloader.dataset)
             print('Training\tEpoch: [{}/{}]\tLoss: {}'.format(epoch+1, args.nepochs, batch_loss))
-            fconv = open(os.path.join(args.output, 'convergence.csv'), 'a')
-            fconv.write('{},loss,{}\n'.format(epoch+1,loss))
+            fconv = open(os.path.join(
+                args.output_path, 'convergence.csv'), 'a')
+            fconv.write('{},loss,{}\n'.format(epoch+1, loss))
             fconv.close()
-            
-            #Validation
-            if args.val_lib and (epoch+1) % args.test_every == 0:
+
+            # Validation
+            if (epoch+1) % args.test_every == 0:
                 val_dataset.setmode(1)
                 probs = inference(epoch, val_dataloader, model)
-                maxs = group_max(np.array(val_dataset.slideIDX), probs, len(val_dataset.targets))
-                pred = [1 if x >= 0.5 else 0 for x in maxs]
+                # maxs = group_max(np.array(val_dataset.slideIDX),probs, len(val_dataset.targets))
+                pred = [1 if x >= 0.5 else 0 for x in probs]
                 print(f"pred in epoch{epoch}:{pred}")
                 print(f"target in epoch{epoch}:{val_dataset.targets}")
-                err,fpr,fnr = calc_err(pred, val_dataset.targets)
+                acc, err, fpr, fnr = calc_err(pred, val_dataset.targets)
 
-                print('Validation\tEpoch: [{}/{}]\tError: {}\tFPR: {}\tFNR: {}'.format(epoch+1, args.nepochs, err, fpr, fnr))
-                fconv = open(os.path.join(args.output_path, 'convergence.csv'), 'a')
+                print('Validation\tEpoch: [{}/{}]\t ACC: {}\tError: {}\tFPR: {}\tFNR: {}'.format(
+                    epoch+1, args.nepochs, acc, err, fpr, fnr))
+                fconv = open(os.path.join(
+                    args.output_path, 'convergence.csv'), 'a')
+
+                fconv.write('{},acc,{}\n'.format(epoch+1, acc))    
                 fconv.write('{},error,{}\n'.format(epoch+1, err))
                 fconv.write('{},fpr,{}\n'.format(epoch+1, fpr))
                 fconv.write('{},fnr,{}\n'.format(epoch+1, fnr))
+                fconv.write('')
                 fconv.close()
-                #Save best model
+
+                # Save best model
                 err = (fpr+fnr)/2.
                 if 1-err >= best_acc:
                     best_acc = 1-err
@@ -345,14 +358,16 @@ class Lite(LightningLite):
                         'epoch': epoch+1,
                         'state_dict': model.state_dict(),
                         'best_acc': best_acc,
-                        'optimizer' : optimizer.state_dict()
+                        'optimizer': optimizer.state_dict()
                     }
-                    torch.save(obj, os.path.join(args.output_path,'checkpoint_best.pth'))
+                    torch.save(obj, os.path.join(
+                        args.output_path, 'checkpoint_best.pth')) 
 
+        
 
+        
 def main():
-    lite = Lite(accelerator="gpu", devices=4)
-    lite.run(learning_rate=1e-4)
+    Lite(devices="auto", accelerator="auto").run(1e-4)
 
 
 if __name__ == "__main__":

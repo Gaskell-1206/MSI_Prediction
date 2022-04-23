@@ -75,8 +75,8 @@ class MILdataset(Dataset):
         self.t_data = random.sample(self.t_data, len(self.t_data))
 
     def load_data_and_get_class(self, df):
-        df.loc[df['label']=='MSI', 'Class'] = 1
-        df.loc[df['label']=='MSS', 'Class'] = 0
+        df.loc[df['label'] == 'MSI', 'Class'] = 1
+        df.loc[df['label'] == 'MSS', 'Class'] = 0
         return df
 
     def __getitem__(self, index):
@@ -110,28 +110,33 @@ class MILdataset(Dataset):
         elif self.mode == 2:
             return len(self.t_data)
 
+
 class MIL_Module(pl.LightningModule):
     def __init__(
-        self, model_name, model_hparams, optimizer_name, optimizer_hparams, args, train_dataset, val_dataset):
+            self, model_name, model_hparams, optimizer_name, optimizer_hparams, args, train_dataset, val_dataset):
         super().__init__()
         self.args = args
         self.save_hyperparameters()
         self.model = models.resnet18(pretrained=True)
-        self.loss_module =  nn.CrossEntropyLoss(torch.Tensor([1-args.weights, args.weights]))
+        self.loss_module = nn.CrossEntropyLoss(
+            torch.Tensor([1-args.weights, args.weights]))
         self.train_dataset = train_dataset
         self.val_dataset = val_dataset
-        self.train_dataloader = DataLoader(self.train_dataset, batch_size=self.args.batch_size, shuffle=False, num_workers=self.args.num_workers, pin_memory=True)
-        self.val_dataloader = DataLoader(self.val_dataset, batch_size=self.args.batch_size, shuffle=False, num_workers=self.args.num_workers, pin_memory=True)
-    
-    
+        self.train_dataloader = DataLoader(self.train_dataset, batch_size=self.args.batch_size,
+                                           shuffle=False, num_workers=self.args.num_workers, pin_memory=True)
+        self.val_dataloader = DataLoader(self.val_dataset, batch_size=self.args.batch_size,
+                                         shuffle=False, num_workers=self.args.num_workers, pin_memory=True)
+
     def forward(self, x):
         return self.model(x)
 
     def configure_optimizers(self):
         if self.hparams.optimizer_name[0] == "Adam":
-            optimizer = torch.optim.AdamW(self.parameters(),**self.hparams.optimizer_hparams[0])
+            optimizer = torch.optim.AdamW(
+                self.parameters(), **self.hparams.optimizer_hparams[0])
         elif self.hparams.optimizer_name[0] == "SGD":
-            optimizer = torch.optim.SGD(self.parameters(), **self.hparams.optimizer_hparams[0])
+            optimizer = torch.optim.SGD(
+                self.parameters(), **self.hparams.optimizer_hparams[0])
         else:
             assert False, f'Unknown optimizer: "{self.hparams.optimizer_name}"'
         # Reduce the learning rate by 0.1 after 50 and 100 epochs
@@ -141,9 +146,10 @@ class MIL_Module(pl.LightningModule):
 
     def on_train_epoch_start(self):
         self.train_dataset.setmode(1)
-        probs = self.predict( self.model, dataloaders=self.train_dataloader)
+        probs = self.predict(self.model, dataloaders=self.train_dataloader)
         # return the indices of topk tile(s) in each slides
-        topk = self.group_argtopk(np.array(self.train_dataset.slideIDX), probs, self.args.k)
+        topk = self.group_argtopk(
+            np.array(self.train_dataset.slideIDX), probs, self.args.k)
         self.train_dataset.maketraindata(topk)
         self.train_dataset.shuffletraindata()
         self.train_dataset.setmode(2)
@@ -163,7 +169,7 @@ class MIL_Module(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         input, labels = batch
         probs = self.model(input)
-        pred = [1 if x>= 0.5 else 0 for x in probs]
+        pred = [1 if x >= 0.5 else 0 for x in probs]
         acc, err, fpr, fnr = self.calc_err(pred, labels)
         auroc_score = roc_auc_score(labels, probs)
         # By default logs it per epoch (weighted average over batches)
@@ -173,19 +179,10 @@ class MIL_Module(pl.LightningModule):
         self.log("fnr", fnr)
         self.log("auroc_score", auroc_score)
 
-    def predict_step(self, batch, batch_idx) -> Any:
+    def predict_step(self, batch, batch_idx):
         input, labels = batch
         probs = F.softmax(self.model(input), dim=1)
         return probs
-
-    def inference(self, loader, model):
-        model.eval()
-        probs = torch.FloatTensor(len(loader.dataset))
-        with torch.no_grad():
-            for i, input in enumerate(loader):
-                output = F.softmax(model(input), dim=1)
-                probs[i*self.args.batch_size:i*self.args.batch_size + input.size(0)] = output.detach()[:, 1].clone()
-        return probs.cpu().numpy()
 
     def calc_err(pred, real):
         pred = np.array(pred)
@@ -220,6 +217,7 @@ class MIL_Module(pl.LightningModule):
         out[groups[index]] = data[index]
         return out
 
+
 class MIL_DataModule(pl.LightningDataModule):
     def __init__(
         self,
@@ -240,41 +238,47 @@ class MIL_DataModule(pl.LightningDataModule):
         self.num_workers = num_workers
 
     def train_dataloader(self):
-        
+        train_dataset = MILdataset(
+            args.lib_dir, args.root_dir, 'Train', transform=self.train_transform, subset_rate=0.001)
         train_DataLoader = DataLoader(train_dataset, batch_size=self.batch_size, shuffle=True,
                                       num_workers=self.num_workers, pin_memory=True)
         return train_DataLoader
 
     def val_dataloader(self):
-        train_path = os.path.join(self.data_path, "CRC_DX_Val")
-        val_dataset = torchvision.datasets.ImageFolder(train_path, self.val_transform)
+        val_dataset = MILdataset(
+            args.lib_dir, args.root_dir, 'Val', transform=self.test_transform, subset_rate=0.001)
         val_DataLoader = DataLoader(val_dataset, batch_size=self.batch_size, shuffle=False,
                                     num_workers=self.num_workers, pin_memory=True)
         return val_DataLoader
 
     def test_dataloader(self):
-        train_path = os.path.join(self.data_path, "CRC_DX_Test")
-        test_dataset = torchvision.datasets.ImageFolder(train_path, self.test_transform)
+        test_dataset = MILdataset(
+            args.lib_dir, args.root_dir, 'Test', transform=self.test_transform, subset_rate=0.001)
         test_DataLoader = DataLoader(test_dataset, batch_size=self.batch_size, shuffle=False,
                                      num_workers=self.num_workers, pin_memory=True)
         return test_DataLoader
 
+
 def main(args):
     # args = args
-    #Environment
+    # Environment
     DATASET_PATH = os.environ.get("PATH_DATASETS", "data/")
-    CHECKPOINT_PATH = os.environ.get("PATH_CHECKPOINT", "saved_models/ConvNets")
+    CHECKPOINT_PATH = os.environ.get(
+        "PATH_CHECKPOINT", "saved_models/ConvNets")
     pl.seed_everything(2022)
 
     torch.backends.cudnn.determinstic = True
     torch.backends.cudnn.benchmark = False
 
-    device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
+    device = torch.device(
+        "cuda:0") if torch.cuda.is_available() else torch.device("cpu")
     # data
     DATA_MEANS = [0.485, 0.456, 0.406]
     DATA_STD = [0.229, 0.224, 0.225]
-    train_transform = transforms.Compose([transforms.RandomHorizontalFlip(),transforms.ToTensor(),transforms.Normalize(DATA_MEANS, DATA_STD)])
-    test_transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(DATA_MEANS, DATA_STD)])
+    train_transform = transforms.Compose([transforms.RandomHorizontalFlip(
+    ), transforms.ToTensor(), transforms.Normalize(DATA_MEANS, DATA_STD)])
+    test_transform = transforms.Compose(
+        [transforms.ToTensor(), transforms.Normalize(DATA_MEANS, DATA_STD)])
     train_dataset = MILdataset(
         args.lib_dir, args.root_dir, 'Train', transform=train_transform, subset_rate=0.001)
     val_dataset = MILdataset(
@@ -284,10 +288,11 @@ def main(args):
 
     # model
     model_name = "resnet18"
-    model_hparams={"num_classes": 2, "act_fn_name": "relu"}
-    optimizer_name="Adam",
-    optimizer_hparams={"lr": 1e-3, "weight_decay": 1e-4},
-    model = MIL_Module(model_name, model_hparams, optimizer_name, optimizer_hparams, args, train_dataset, val_dataset)
+    model_hparams = {"num_classes": 2, "act_fn_name": "relu"}
+    optimizer_name = "Adam",
+    optimizer_hparams = {"lr": 1e-3, "weight_decay": 1e-4},
+    model = MIL_Module(model_name, model_hparams, optimizer_name,
+                       optimizer_hparams, args, train_dataset, val_dataset)
 
     # training
     trainer = pl.Trainer(
@@ -295,23 +300,27 @@ def main(args):
         gpus=1 if str(device) == "cuda:0" else 0,
         min_epochs=10,
         max_epochs=args.nepochs,
-        callbacks=[ModelCheckpoint(save_weights_only=True, mode="max", monitor="val_acc"), 
-        LearningRateMonitor("epoch")],
+        callbacks=[ModelCheckpoint(save_weights_only=True, mode="max", monitor="val_acc"),
+                   LearningRateMonitor("epoch")],
         auto_lr_find=True
     )
-    trainer.logger._log_graph = True  # If True, we plot the computation graph in tensorboard
-    trainer.logger._default_hp_metric = None  # Optional logging argument that we don't need
+    # If True, we plot the computation graph in tensorboard
+    trainer.logger._log_graph = True
+    # Optional logging argument that we don't need
+    trainer.logger._default_hp_metric = None
 
     # [Optional] lr_finder
-    lr_finder = trainer.tuner.lr_find(model,train_dataloader=MIL_Module.train_dataloader,val_dataloaders=MIL_Module.val_dataloader)
+    lr_finder = trainer.tuner.lr_find(model, datamodule=MIL_DataModule)
     model.hparams.learning_rate = lr_finder.suggestion()
 
     # fit
-    trainer.fit(model, train_dataloader=MIL_Module.train_dataloader,val_dataloaders=MIL_Module.val_dataloader)
+    trainer.fit(model, train_dataloader=MIL_Module.train_dataloader,
+                val_dataloaders=MIL_Module.val_dataloader)
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser = argparse.ArgumentParser(
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument(
         "--root_dir",
         type=Path,
@@ -368,17 +377,28 @@ if __name__ == "__main__":
         type=int,
         help="top k tiles are assumed to be of the same class as the slide (default: 1, standard MIL)",
     )
-    # args = parser.parse_args()
-    class Args:
-        root_dir = '/Users/gaskell/Dropbox/Mac/Desktop/CBH/ex_data/CRC_DX_data_set/Dataset'
-        lib_dir = '/Users/gaskell/Dropbox/Mac/Desktop/CBH/ex_data/CRC_DX_data_set/CRC_DX_Lib'
-        output_path = '/Users/gaskell/Dropbox/Mac/Desktop/CBH/ex_data/CRC_DX_data_set/Output'
-        batch_size = 128
-        nepochs = 2
-        num_workers = 1
-        test_every = 1
-        weights = 0.5
-        k = 1
 
-    args = Args()
+    args = parser.parse_args()
+
+    # configure checkpointing in checkpoint_dir
+    checkpoint_dir = args.default_root_dir / "checkpoints"
+    if not checkpoint_dir.exists():
+        checkpoint_dir.mkdir(parents=True)
+
+    args.callbacks = [
+        pl.callbacks.ModelCheckpoint(
+            dirpath=args.default_root_dir / "checkpoints",
+            save_top_k=True,
+            verbose=True,
+            monitor="validation_loss",
+            mode="min",
+        )
+    ]
+
+    # set default checkpoint if one exists in our checkpoint directory
+    if args.resume_from_checkpoint is None:
+        ckpt_list = sorted(checkpoint_dir.glob("*.ckpt"), key=os.path.getmtime)
+        if ckpt_list:
+            args.resume_from_checkpoint = str(ckpt_list[-1])
+
     main(args)

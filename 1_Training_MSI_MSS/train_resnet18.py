@@ -1,9 +1,7 @@
 import argparse
 import os
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Callable, Optional, Union
-from urllib.error import HTTPError
 import numpy as np
 import pytorch_lightning as pl
 import torch
@@ -12,7 +10,6 @@ import torch.optim as optim
 import torch.utils.data as data
 import torchvision
 import torchvision.models as models
-from PIL import Image
 from pytorch_lightning.callbacks import (EarlyStopping, LearningRateMonitor,
                                          ModelCheckpoint)
 from torchvision import transforms
@@ -179,7 +176,7 @@ def main(args):
         gpus=1 if str(device) == "cuda:0" else 0,
         min_epochs=10,
         max_epochs=args.nepochs,
-        callbacks=[ModelCheckpoint(save_weights_only=True, mode="max", monitor="val_acc"),
+        callbacks=[ModelCheckpoint(save_weights_only=False, mode="max", monitor="val_acc"),
                    LearningRateMonitor("epoch")],
         # auto_scale_batch_size='binsearch', # [Optional] auto_scale_batch_size
         auto_lr_find=True
@@ -213,8 +210,7 @@ if __name__ == "__main__":
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
 
-    CHECKPOINT_PATH = os.environ.get(
-        "PATH_CHECKPOINT", "saved_models/ConvNets")
+    CHECKPOINT_PATH = os.environ.get("PATH_CHECKPOINT", "saved_models/ConvNets")
     model_name = "resnet18"
     # set defaults based on optional directory config
     default_root_dir = Path(os.path.join(CHECKPOINT_PATH, model_name))

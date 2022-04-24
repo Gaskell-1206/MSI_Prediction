@@ -215,14 +215,23 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
+
+    CHECKPOINT_PATH = os.environ.get(
+        "PATH_CHECKPOINT", "saved_models/ConvNets")
+    model_name = "resnet18"
+    # set defaults based on optional directory config
+    default_root_dir = Path(os.path.join(CHECKPOINT_PATH, model_name))
+
     parser.add_argument(
         "--root_dir",
+        default='',
         type=Path,
         required=True,
         help="root directory of dataset",
     )
     parser.add_argument(
         "--output_path",
+        default='',
         type=Path,
         required=True,
         help="output directory",
@@ -237,7 +246,6 @@ if __name__ == "__main__":
         "--num_workers",
         default=0,
         type=int,
-        required=True,
         help="number of workers",
     )
     parser.add_argument(
@@ -247,16 +255,27 @@ if __name__ == "__main__":
         help="training epoch",
     )
 
+    # trainer config
+    parser = pl.Trainer.add_argparse_args(parser)
+    parser.set_defaults(
+        gpus=1,  # number of gpus to use
+        replace_sampler_ddp=False,  # this is necessary for volume dispatch during val
+        seed=42,  # random seed
+        deterministic=True,  # makes things slower, but deterministic
+        default_root_dir=default_root_dir,  # directory for logs and checkpoints
+        max_epochs=50,  # max number of epochs
+    )
+
     args = parser.parse_args()
-    
+
     # configure checkpointing in checkpoint_dir
-    checkpoint_dir = args.default_root_dir / "checkpoints"
+    checkpoint_dir = default_root_dir / "checkpoints"
     if not checkpoint_dir.exists():
         checkpoint_dir.mkdir(parents=True)
 
     args.callbacks = [
         pl.callbacks.ModelCheckpoint(
-            dirpath=args.default_root_dir / "checkpoints",
+            dirpath=default_root_dir / "checkpoints",
             save_top_k=True,
             verbose=True,
             monitor="validation_loss",

@@ -250,24 +250,24 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     # configure checkpointing in checkpoint_dir
-    checkpoint_dir = args.default_root_dir / "checkpoints"
-    if not checkpoint_dir.exists():
-        checkpoint_dir.mkdir(parents=True)
+    # checkpoint_dir = args.default_root_dir / "checkpoints"
+    # if not checkpoint_dir.exists():
+    #     checkpoint_dir.mkdir(parents=True)
 
-    args.callbacks = [
-        pl.callbacks.ModelCheckpoint(
-            dirpath=args.default_root_dir / "checkpoints",
-            save_top_k=True,
-            verbose=True,
-            monitor="validation_loss",
-            mode="min",
-        )
-    ]
+    # args.callbacks = [
+    #     pl.callbacks.ModelCheckpoint(
+    #         dirpath=args.default_root_dir / "checkpoints",
+    #         save_top_k=True,
+    #         verbose=True,
+    #         monitor="validation_loss",
+    #         mode="min",
+    #     )
+    # ]
 
-    # set default checkpoint if one exists in our checkpoint directory
-    if args.resume_from_checkpoint is None:
-        ckpt_list = sorted(checkpoint_dir.glob("*.ckpt"), key=os.path.getmtime)
-        if ckpt_list:
-            args.resume_from_checkpoint = str(ckpt_list[-1])
+    # # set default checkpoint if one exists in our checkpoint directory
+    # if args.resume_from_checkpoint is None:
+    #     ckpt_list = sorted(checkpoint_dir.glob("*.ckpt"), key=os.path.getmtime)
+    #     if ckpt_list:
+    #         args.resume_from_checkpoint = str(ckpt_list[-1])
 
     main(args)

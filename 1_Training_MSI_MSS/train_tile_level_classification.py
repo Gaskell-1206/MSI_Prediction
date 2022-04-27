@@ -207,12 +207,15 @@ class MSI_MSS_Module(pl.LightningModule):
         except ValueError:
             self.log("val_auroc_score", .0, on_step=False, on_epoch=True)
         self.log("val_f1_score", val_f1_score, on_step=False, on_epoch=True)
-        # image_name = os.path.join(
-        #     args.output_path, 'Image', f'{self.hparams.model_name}_Val_{self.global_step}_Confusion_Matrix.jpg')
-        # self.createConfusionMatrix(y_true, y_pred).savefig(image_name)
-        # load_image = np.array(image.imread(image_name)).transpose(2, 0, 1)
-        # self.logger.experiment.add_image(
-        #     "Val Confusion matrix", load_image, global_step=self.global_step)
+        # save y_true, y_pred for use
+        # test_temp = pd.read_csv('/gpfs/scratch/sc9295/digPath/CRC_DX_data_set/CRC_DX_Lib/Test_temporary.csv')
+        # version_name = f'Binary_Test_{self.hparams.model_name}_bs{args.batch_size}_lr{args.learning_rate}_output'
+        # fp = open(os.path.join(
+        #     f'saved_models/ConvNets/{self.hparams.model_name}', f'{version_name}.csv'), 'w')
+        # fp.write('target,prediction,probability\n')
+        # for slides, tiles, target, pred, prob in zip(test_temp['subject_id'],test_temp['slice_id'],y_true, y_pred, y_prob):
+        #     fp.write('{},{},{},{},{}\n'.format(slides, tiles, int(target), pred, prob))
+        # fp.close()
 
     def test_step(self, batch, batch_idx):
         imgs, labels = batch
@@ -236,21 +239,22 @@ class MSI_MSS_Module(pl.LightningModule):
         except ValueError:
             pass
         self.log("test_f1_score", test_f1_score, on_step=False, on_epoch=True)
-        image_name = os.path.join(
-            args.output_path, 'Image', f'{self.hparams.model_name}_Test_{self.global_step}_Confusion_Matrix.jpg')
-        self.createConfusionMatrix(y_true, y_pred).savefig(image_name)
-        load_image = np.array(image.imread(image_name)).transpose(2, 0, 1)
-        self.logger.experiment.add_image(
-            "Test Confusion matrix", load_image, global_step=self.global_step)
+        # image_name = os.path.join(
+        #     args.output_path, 'Image', f'{self.hparams.model_name}_Test_{self.global_step}_Confusion_Matrix.jpg')
+        # self.createConfusionMatrix(y_true, y_pred).savefig(image_name)
+        # load_image = np.array(image.imread(image_name)).transpose(2, 0, 1)
+        # self.logger.experiment.add_image(
+        #     "Test Confusion matrix", load_image, global_step=self.global_step)
 
         # save y_true, y_pred for use
-        version_name = f'MIL_{self.hparams.model_name}_bs{args.batch_size}_lr1e-3_output'
-        fp = open(os.path.join(
-            f'saved_models/ConvNets/{self.hparams.model_name}', f'{version_name}.csv'), 'w')
-        fp.write('target,prediction,probability\n')
-        for target, pred, prob in zip(y_true, y_pred, y_prob):
-            fp.write('{},{},{}\n'.format(int(target), pred, prob))
-        fp.close()
+        # test_temp = pd.read_csv('/gpfs/scratch/sc9295/digPath/CRC_DX_data_set/CRC_DX_Lib/Test_temporary.csv')
+        # version_name = f'Binary_Test_{self.hparams.model_name}_bs{args.batch_size}_lr{args.learning_rate}_output'
+        # fp = open(os.path.join(
+        #     f'saved_models/ConvNets/{self.hparams.model_name}', f'{version_name}.csv'), 'w')
+        # fp.write('target,prediction,probability\n')
+        # for slides, tiles, target, pred, prob in zip(test_temp['subject_id'],test_temp['slice_id'],y_true, y_pred, y_prob):
+        #     fp.write('{},{},{},{},{}\n'.format(slides, tiles, int(target), pred, prob))
+        # fp.close()
 
     def createConfusionMatrix(self, y_true, y_pred):
         # constant for classes
@@ -411,7 +415,7 @@ def main(args):
     model_name = args.model_name
     model_hparams = {"num_classes": 2, "act_fn_name": "relu"}
     optimizer_name = "Adam",
-    optimizer_hparams = {"lr": args.learning_rate, "weight_decay": 1e-4},
+    optimizer_hparams = {"lr": args.learning_rate, "weight_decay": 1e-5},
     model = MSI_MSS_Module(model_name, model_hparams,
                           optimizer_name, optimizer_hparams)
 

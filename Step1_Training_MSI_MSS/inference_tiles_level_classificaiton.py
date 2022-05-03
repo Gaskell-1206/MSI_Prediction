@@ -238,8 +238,8 @@ class MSI_MSS_Module(pl.LightningModule):
         # save y_true, y_pred for use
         version_name = f'Tiles_level_{self.loader}_{self.hparams.model_name}_bs{args.batch_size}_lr{args.learning_rate}_output'
         df_temp = pd.read_csv(f'/gpfs/scratch/sc9295/digPath/CRC_DX_data_set/CRC_DX_Lib/{self.loader}_temporary.csv')
-        fp = open(os.path.join(
-            f'saved_models/ConvNets/{self.hparams.model_name}', f'{version_name}.csv'), 'w')
+        fp = open(os.path.join( '/gpfs/scratch/sc9295/digPath/',
+            f'saved_models/ConvNets/{self.hparams.model_name}_bs{args.batch_size}_lr{args.learning_rate}', f'{version_name}.csv'), 'w')
         fp.write('slides,tiles,target,prediction,probability\n')
         for slides, tiles, target, pred, prob in zip(list(df_temp['subject_id'][:len(y_true)]),list(df_temp['slice_id'][:len(y_true)]),y_true, y_pred, y_prob):
             fp.write('{},{},{},{},{}\n'.format(slides, tiles, int(target), pred, prob))
@@ -416,7 +416,7 @@ def main(args):
     model_name = args.model_name
     model_hparams = {"num_classes": 2, "act_fn_name": "relu"}
     optimizer_name = "Adam",
-    optimizer_hparams = {"lr": args.learning_rate, "weight_decay": 1e-4},
+    optimizer_hparams = {"lr": args.learning_rate, "weight_decay": 1e-5},
     loader = "Train"
     model = MSI_MSS_Module(model_name, model_hparams,
                            optimizer_name, optimizer_hparams,loader)
@@ -457,10 +457,9 @@ def main(args):
     test_DataLoader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, drop_last=True,
                                     num_workers=args.num_workers, pin_memory=True)
 
-
     # Test best model on test set
-    ckpt_path = f'/gpfs/scratch/sc9295/digPath/1_Training_MSI_MSS_sbatch/saved_models/ConvNets/{args.model_name}/lightning_logs/version_0/checkpoints/'
-    ckpt_file_path = glob.glob(f'{ckpt_path}*.ckpt')[0]
+    ckpt_path = f'/gpfs/scratch/sc9295/digPath/saved_models/ConvNets/{args.model_name}_bs{args.batch_size}_lr{args.learning_rate}/'
+    ckpt_file_path = glob.glob(os.path.join(ckpt_path,'*.ckpt'))[0]
     model = MSI_MSS_Module.load_from_checkpoint(ckpt_file_path)
     model.loader = 'Train'
     test_result = trainer.test(model, dataloaders=train_DataLoader, verbose=True)

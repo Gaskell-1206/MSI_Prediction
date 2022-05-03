@@ -1,109 +1,39 @@
-from datetime import datetime
-import sys
 import argparse
-import random
-import time
-from pathlib import Path
 import os
+import random
+import sys
+from pathlib import Path
 from types import SimpleNamespace
+from typing import Callable, Optional, Union
 from urllib.error import HTTPError
-import pandas as pd
+import glob
 import numpy as np
-from skimage import io
+import pandas as pd
 import pytorch_lightning as pl
+import torch
+import torch.backends.cudnn as cudnn
+import torch.nn as nn
+import torch.nn.functional as F
+import torchvision.models as models
+from PIL import Image
+from pytorch_lightning.callbacks import (EarlyStopping, LearningRateMonitor,
+                                         ModelCheckpoint)
 from pytorch_lightning.lite import LightningLite
 from pytorch_lightning.loops import Loop
-import torch
-import torch.nn as nn
-from torch.utils.data import DataLoader, Dataset
-import torchvision
-import torchvision.models as models
-import torch.nn.functional as F
+from skimage import io
 from sklearn.preprocessing import LabelEncoder
-from tqdm import tqdm
-from typing import Callable, Union, Optional
-
-# from IPython.display import HTML, display, set_matplotlib_formats
-from PIL import Image
-from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint, EarlyStopping
+from torch.utils.data import DataLoader, Dataset
+from torch.utils.tensorboard import SummaryWriter
 from torchvision import transforms
-import urllib.request
-# import ssl
+from tqdm import tqdm
+sys.path.append('/gpfs/scratch/sc9295/digPath/MSI_vs_MSS_Classification/Step1_Training_MSI_MSS')
+from train_tile_level_classification import MSI_MSS_Module
+from sklearn.metrics import (auc, confusion_matrix, f1_score, roc_auc_score,
+                             roc_curve)
 
 best_acc = 0
 
-class Args:
-    root_dir = '/Users/gaskell/Dropbox/Mac/Desktop/CBH/ex_data/CRC_DX_data_set/Dataset'
-    lib_dir = '/Users/gaskell/Dropbox/Mac/Desktop/CBH/ex_data/CRC_DX_data_set/CRC_DX_Lib'
-    output_path = '/Users/gaskell/Dropbox/Mac/Desktop/CBH/ex_data/CRC_DX_data_set/Output'
-    batch_size = 128
-    nepochs = 10
-    num_workers = 4
-    test_every = 10
-    weights = 0.5
-    k = 1
-
-parser = argparse.ArgumentParser(
-    formatter_class=argparse.ArgumentDefaultsHelpFormatter
-)
-parser.add_argument(
-    "--root_dir",
-    type=Path,
-    required=True,
-    help="root directory of dataset",
-)
-parser.add_argument(
-    "--lib_dir",
-    type=Path,
-    required=True,
-    help="root directory of libraryfile",
-)
-parser.add_argument(
-    "--output_path",
-    type=Path,
-    required=True,
-    help="output directory",
-)
-parser.add_argument(
-    "--batch_size",
-    default=128,
-    type=int,
-    help="batch size",
-)
-parser.add_argument(
-    "--num_workers",
-    default=0,
-    type=int,
-    required=True,
-    help="number of workers",
-)
-parser.add_argument(
-    "--nepochs",
-    default=50,
-    type=int,
-    help="training epoch",
-)
-parser.add_argument(
-    '--test_every',
-    default=10,
-    type=int,
-    help='test on val every (default: 10)')
-
-parser.add_argument(
-    "--weights",
-    default=0.5,
-    type=float,
-    help="unbalanced positive class weight (default: 0.5, balanced classes)",
-)
-
-parser.add_argument(
-    "--k",
-    default=1,
-    type=int,
-    help="top k tiles are assumed to be of the same class as the slide (default: 1, standard MIL)",
-)
-
-def inference(run, loader, model):
+def inference(loader, model):
     model.eval()
     probs = torch.FloatTensor(len(loader.dataset))
     with torch.no_grad():
@@ -112,8 +42,9 @@ def inference(run, loader, model):
             #     'Inference\tEpoch: [{}/{}]\tBatch: [{}/{}]'.format(run+1, args.nepochs, i+1, len(loader)))
             output = F.softmax(model(input), dim=1)
             probs[i*args.batch_size:i*args.batch_size +
-                input.size(0)] = output.detach()[:, 1].clone()
+                  input.size(0)] = output.detach()[:, 1].clone()
     return probs.cpu().numpy()
+
 
 def train(run, loader, model, criterion, optimizer):
     model.train()
@@ -144,6 +75,7 @@ def calc_err(pred, real):
 
 def group_argtopk(groups, data, k=1):
     # groups in slide, data is prob of each tile
+    k = min(k,len(data))
     order = np.lexsort((data, groups))
     groups = groups[order]
     data = data[order]
@@ -178,9 +110,9 @@ class MILdataset(Dataset):
                    f'{dataset_mode}_temporary.csv'))
         slides = []
         for i, name in enumerate(lib['subject_id'].unique()):
-            sys.stdout.write(
-                'Slides: [{}/{}]\r'.format(i+1, len(lib['subject_id'].unique())))
-            sys.stdout.flush()
+            # sys.stdout.write(
+            #     'Slides: [{}/{}]\r'.format(i+1, len(lib['subject_id'].unique())))
+            # sys.stdout.flush()
             slides.append(name)
 
         # Flatten grid
@@ -213,8 +145,8 @@ class MILdataset(Dataset):
         self.t_data = random.sample(self.t_data, len(self.t_data))
 
     def load_data_and_get_class(self, df):
-        df.loc[df['label']=='MSI', 'Class'] = 1
-        df.loc[df['label']=='MSS', 'Class'] = 0
+        df.loc[df['label'] == 'MSI', 'Class'] = 1
+        df.loc[df['label'] == 'MSS', 'Class'] = 0
         return df
 
     def __getitem__(self, index):
@@ -248,18 +180,22 @@ class MILdataset(Dataset):
         elif self.mode == 2:
             return len(self.t_data)
 
+
 class Lite(LightningLite):
 
-    def run(self, learning_rate):
-        global args, best_acc
-        # args = parser.parse_args()
-        args = Args()
+    def run(self, args):
+        global best_acc
+        print(args)
+
         self.seed_everything(2022)
-        model_name = "resnet18"
-        model = models.resnet18(pretrained=True)
-        model.fc = nn.Linear(model.fc.in_features, 2)
-        optimizer = torch.optim.SGD(
-            model.parameters(), lr=learning_rate, weight_decay=1e-4)
+        model_name = args.model_name
+        sample_rate = args.sample_rate
+        ckpt_path = os.path.join(args.model_path, f'{args.model_name}_bs{args.batch_size}_lr{args.learning_rate}')
+        ckpt_file_path = glob.glob(os.path.join(ckpt_path,'*.ckpt'))[0]
+        model = MSI_MSS_Module.load_from_checkpoint(ckpt_file_path)
+
+        optimizer = torch.optim.AdamW(
+            model.parameters(), lr=args.learning_rate, weight_decay=1e-4)
         if args.weights == 0.5:
             criterion = nn.CrossEntropyLoss()
         else:
@@ -282,11 +218,11 @@ class Lite(LightningLite):
             transforms.Normalize(DATA_MEANS, DATA_STD)])
 
         train_dataset = MILdataset(
-            args.lib_dir, args.root_dir, 'Train', transform=train_transform, subset_rate=0.001)
+            args.lib_dir, args.root_dir, 'Train', transform=train_transform, subset_rate=sample_rate)
         val_dataset = MILdataset(
-            args.lib_dir, args.root_dir, 'Val', transform=test_transform, subset_rate=0.001)
+            args.lib_dir, args.root_dir, 'Val', transform=test_transform, subset_rate=sample_rate)
         test_dataset = MILdataset(
-            args.lib_dir, args.root_dir, 'Test', transform=test_transform, subset_rate=0.001)
+            args.lib_dir, args.root_dir, 'Test', transform=test_transform, subset_rate=sample_rate)
 
         train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size,
                                       shuffle=False, num_workers=args.num_workers, pin_memory=True)
@@ -298,16 +234,18 @@ class Lite(LightningLite):
             train_dataloader, val_dataloader, test_dataloader, move_to_device=True)
 
         # open output file
-        fconv=open(os.path.join(args.output_path, f'{random.getrandbits(8)}_prob_output_{model_name}.csv'), 'w')
-        fconv.write('epoch,metric,value\n')
-        fconv.close()
+        version_name = f'MIL_{model_name}_bs{args.batch_size}_lr{args.learning_rate}_w{args.weights}_k{args.k}_output'
+        # logger
+        output_path = os.path.join(args.output_path,version_name)
+        writer = SummaryWriter(output_path)
 
         for epoch in tqdm(range(args.nepochs)):
             train_dataset.setmode(1)
-            print("train_set_len:", len(train_dataloader.dataset))
-            probs = inference(epoch, train_dataloader, model)
+            # print("train_set_len:", len(train_dataloader.dataset))
+            probs = inference(train_dataloader, model)
             # return the indices of topk tile(s) in each slides
-            topk = group_argtopk(np.array(train_dataset.slideIDX), probs, args.k)
+            topk = group_argtopk(
+                np.array(train_dataset.slideIDX), probs, args.k)
             train_dataset.maketraindata(topk)
             train_dataset.shuffletraindata()
             train_dataset.setmode(2)
@@ -321,34 +259,28 @@ class Lite(LightningLite):
                 self.backward(loss)
                 optimizer.step()
                 running_loss += loss.item()*input.size(0)
-            batch_loss = running_loss/len(train_dataloader.dataset)
-            print('Training\tEpoch: [{}/{}]\tLoss: {}'.format(epoch+1, args.nepochs, batch_loss))
-            fconv = open(os.path.join(
-                args.output_path, 'convergence.csv'), 'a')
-            fconv.write('{},loss,{}\n'.format(epoch+1, loss))
-            fconv.close()
+
+            train_loss = running_loss/len(train_dataloader.dataset)
+            print(
+                'Training\tEpoch: [{}/{}]\tLoss: {}'.format(epoch+1, args.nepochs, train_loss))
+            writer.add_scalar('train_loss', train_loss, epoch+1)
+
 
             # Validation
             if (epoch+1) % args.test_every == 0:
                 val_dataset.setmode(1)
-                probs = inference(epoch, val_dataloader, model)
-                # maxs = group_max(np.array(val_dataset.slideIDX),probs, len(val_dataset.targets))
+                probs = inference(val_dataloader, model)
+                maxs = group_max(np.array(val_dataset.slideIDX),
+                                 probs, len(val_dataset.targets))
                 pred = [1 if x >= 0.5 else 0 for x in probs]
-                print(f"pred in epoch{epoch}:{pred}")
-                print(f"target in epoch{epoch}:{val_dataset.targets}")
-                acc, err, fpr, fnr = calc_err(pred, val_dataset.targets)
+                val_acc, err, fpr, fnr = calc_err(pred, val_dataset.targets)
 
                 print('Validation\tEpoch: [{}/{}]\t ACC: {}\tError: {}\tFPR: {}\tFNR: {}'.format(
-                    epoch+1, args.nepochs, acc, err, fpr, fnr))
-                fconv = open(os.path.join(
-                    args.output_path, 'convergence.csv'), 'a')
+                    epoch+1, args.nepochs, val_acc, err, fpr, fnr))
 
-                fconv.write('{},acc,{}\n'.format(epoch+1, acc))    
-                fconv.write('{},error,{}\n'.format(epoch+1, err))
-                fconv.write('{},fpr,{}\n'.format(epoch+1, fpr))
-                fconv.write('{},fnr,{}\n'.format(epoch+1, fnr))
-                fconv.write('')
-                fconv.close()
+                writer.add_scalar('val_acc', val_acc, epoch+1)
+                writer.add_scalar('fpr', fpr, epoch+1)
+                writer.add_scalar('fnr', fnr, epoch+1)
 
                 # Save best model
                 err = (fpr+fnr)/2.
@@ -360,15 +292,149 @@ class Lite(LightningLite):
                         'best_acc': best_acc,
                         'optimizer': optimizer.state_dict()
                     }
-                    torch.save(obj, os.path.join(
-                        args.output_path, 'checkpoint_best.pth')) 
+                    torch.save(obj, os.path.join(output_path, 'checkpoint_best.pth'))
 
-        
+        # test
+        ch = torch.load(os.path.join(output_path,'checkpoint_best.pth'))
+        # load params
+        model.load_state_dict(ch['state_dict'])
+        model = model.cuda()
+        cudnn.benchmark = True
+        train_dataset.setmode(1)
+        val_dataset.setmode(1)
+        test_dataset.setmode(1)
 
-        
-def main():
-    Lite(devices="auto", accelerator="auto").run(1e-4)
+        # Train
+        probs = inference(train_dataloader, model)
+        maxs = group_max(np.array(train_dataset.slideIDX), probs, len(train_dataset.targets))
+        fp = open(os.path.join(output_path, f'Train_{version_name}.csv'), 'w')
+        fp.write('slides,tiles,target,prediction,probability\n')
+        for slides, tiles, target, prob in zip(train_dataset.slidenames, train_dataset.grid, train_dataset.targets, probs):
+            fp.write('{},{},{},{},{}\n'.format(slides, tiles, target, int(prob>=0.5), prob))
+        fp.close()
 
+        # Val
+        probs = inference(val_dataloader, model)
+        maxs = group_max(np.array(val_dataset.slideIDX), probs, len(val_dataset.targets))
+        fp = open(os.path.join(output_path, f'Val_{version_name}.csv'), 'w')
+        fp.write('slides,tiles,target,prediction,probability\n')
+        for slides, tiles, target, prob in zip(val_dataset.slidenames, val_dataset.grid, val_dataset.targets, probs):
+            fp.write('{},{},{},{},{}\n'.format(slides, tiles, target, int(prob>=0.5), prob))
+        fp.close()
+
+        # Test
+        probs = inference(test_dataloader, model)
+        maxs = group_max(np.array(test_dataset.slideIDX), probs, len(test_dataset.targets))
+        fp = open(os.path.join(output_path, f'Test_{version_name}.csv'), 'w')
+        fp.write('slides,tiles,target,prediction,probability\n')
+        for slides, tiles, target, prob in zip(test_dataset.slidenames, test_dataset.grid, test_dataset.targets, probs):
+            fp.write('{},{},{},{},{}\n'.format(slides, tiles, target, int(prob>=0.5), prob))
+        fp.close()   
+
+        pred = [1 if x >= 0.5 else 0 for x in probs]
+        test_acc, err, fnr, fpr = calc_err(pred, test_dataset.targets)
+        test_f1_score = f1_score(test_dataset.targets, pred, average='binary')
+
+        try:
+            test_auroc_score = roc_auc_score(test_dataset.targets, probs)
+            writer.add_scalar("test_auroc_score", test_auroc_score)
+        except ValueError:
+            writer.add_scalar('test_auroc_score', .0)
+
+        writer.add_scalar('test_f1_score', test_f1_score)    
+        writer.add_scalar('test_acc', test_acc)
+
+
+
+def main(args):
+    Lite(devices="auto", accelerator="auto").run(args)
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(
+    formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+    parser.add_argument(
+        "--root_dir",
+        type=Path,
+        required=True,
+        help="root directory of dataset",
+    )
+    parser.add_argument(
+        "--lib_dir",
+        type=Path,
+        required=True,
+        help="root directory of libraryfile",
+    )
+    parser.add_argument(
+        "--model_path",
+        type=Path,
+        required=True,
+        help="root directory of pretrained models",
+    )
+    parser.add_argument(
+        "--output_path",
+        type=Path,
+        required=True,
+        help="output directory",
+    )
+    parser.add_argument(
+        "--model_name",
+        default='alexnet',
+        choices=('resnet18', 'resnet34', 'alexnet', 'vgg',
+                 'squeezenet', 'densenet', 'inception'),
+        type=str,
+        help="model use for train",
+    )
+    parser.add_argument(
+        "--sample_rate",
+        default=1,
+        type=float,
+        help="undersample rate",
+    )
+    parser.add_argument(
+        "--batch_size",
+        default=128,
+        type=int,
+        help="batch size",
+    )
+    parser.add_argument(
+        "--learning_rate",
+        default=1e-3,
+        type=float,
+        help="learning rate",
+    )
+    parser.add_argument(
+        "--num_workers",
+        default=0,
+        type=int,
+        required=True,
+        help="number of workers",
+    )
+    parser.add_argument(
+        "--nepochs",
+        default=50,
+        type=int,
+        help="training epoch",
+    )
+    parser.add_argument(
+        '--test_every',
+        default=1,
+        type=int,
+        help='test on val every (default: 10)')
+
+    parser.add_argument(
+        "--weights",
+        default=0.5,
+        type=float,
+        help="unbalanced positive class weight (default: 0.5, balanced classes)",
+    )
+
+    parser.add_argument(
+        "--k",
+        default=1,
+        type=int,
+        help="top k tiles are assumed to be of the same class as the slide (default: 1, standard MIL)",
+    )
+    
+    args = parser.parse_args()
+    main(args)

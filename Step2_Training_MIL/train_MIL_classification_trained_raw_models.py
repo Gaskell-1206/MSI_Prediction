@@ -6,7 +6,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Callable, Optional, Union
 from urllib.error import HTTPError
-
 import glob
 import numpy as np
 import pandas as pd
@@ -27,12 +26,14 @@ from torch.utils.data import DataLoader, Dataset
 from torch.utils.tensorboard import SummaryWriter
 from torchvision import transforms
 from tqdm import tqdm
-sys.path.append('/Users/gaskell/Dropbox/Mac/Desktop/CBH/code_library/MSI_vs_MSS_Classification/Step1_Training_MSI_MSS')
+sys.path.append('/gpfs/scratch/sc9295/digPath/MSI_vs_MSS_Classification/Step1_Training_MSI_MSS')
 from train_tile_level_classification import MSI_MSS_Module
+from sklearn.metrics import (auc, confusion_matrix, f1_score, roc_auc_score,
+                             roc_curve)
 
 best_acc = 0
 
-def inference(run, loader, model):
+def inference(loader, model):
     model.eval()
     probs = torch.FloatTensor(len(loader.dataset))
     with torch.no_grad():
@@ -74,6 +75,7 @@ def calc_err(pred, real):
 
 def group_argtopk(groups, data, k=1):
     # groups in slide, data is prob of each tile
+    k = min(k,len(data))
     order = np.lexsort((data, groups))
     groups = groups[order]
     data = data[order]
@@ -94,6 +96,92 @@ def group_max(groups, data, nmax):
     index[:-1] = groups[1:] != groups[:-1]
     out[groups[index]] = data[index]
     return out
+
+def set_parameter_requires_grad(model, feature_extracting):
+    if feature_extracting:
+        for param in model.parameters():
+            param.requires_grad = False
+
+def initialize_model(model_name, num_classes, feature_extract, use_pretrained=True):
+    # Initialize these variables which will be set in this if statement. Each of these
+    #   variables is model specific.
+    model_ft = None
+    input_size = 0
+
+    if model_name == "resnet18":
+        """ Resnet18
+        """
+        model_ft = models.resnet18(pretrained=use_pretrained)
+        set_parameter_requires_grad(model_ft, feature_extract)
+        num_ftrs = model_ft.fc.in_features
+        model_ft.fc = nn.Linear(num_ftrs, num_classes)
+        input_size = 224
+
+    elif model_name == "resnet34":
+        """ Resnet34
+        """
+        model_ft = models.resnet34(pretrained=use_pretrained)
+        set_parameter_requires_grad(model_ft, feature_extract)
+        num_ftrs = model_ft.fc.in_features
+        model_ft.fc = nn.Linear(num_ftrs, num_classes)
+        input_size = 224
+
+    elif model_name == "alexnet":
+        """ Alexnet
+        """
+        model_ft = models.alexnet(pretrained=use_pretrained)
+        set_parameter_requires_grad(model_ft, feature_extract)
+        num_ftrs = model_ft.classifier[6].in_features
+        model_ft.classifier[6] = nn.Linear(num_ftrs, num_classes)
+        input_size = 224
+
+    elif model_name == "vgg":
+        """ VGG11_bn
+        """
+        model_ft = models.vgg11_bn(pretrained=use_pretrained)
+        set_parameter_requires_grad(model_ft, feature_extract)
+        num_ftrs = model_ft.classifier[6].in_features
+        model_ft.classifier[6] = nn.Linear(num_ftrs, num_classes)
+        input_size = 224
+
+    elif model_name == "squeezenet":
+        """ Squeezenet
+        """
+        model_ft = models.squeezenet1_0(pretrained=use_pretrained)
+        set_parameter_requires_grad(model_ft, feature_extract)
+        model_ft.classifier[1] = nn.Conv2d(
+            512, num_classes, kernel_size=(1, 1), stride=(1, 1))
+        model_ft.num_classes = num_classes
+        input_size = 224
+
+    elif model_name == "densenet":
+        """ Densenet
+        """
+        model_ft = models.densenet121(pretrained=use_pretrained)
+        set_parameter_requires_grad(model_ft, feature_extract)
+        num_ftrs = model_ft.classifier.in_features
+        model_ft.classifier = nn.Linear(num_ftrs, num_classes)
+        input_size = 224
+
+    elif model_name == "inception":
+        """ Inception v3
+        Be careful, expects (299,299) sized images and has auxiliary output
+        """
+        model_ft = models.inception_v3(pretrained=use_pretrained, aux_logits=False)
+        set_parameter_requires_grad(model_ft, feature_extract)
+        # Handle the auxilary net
+        # num_ftrs = model_ft.AuxLogits.fc.in_features
+        # model_ft.AuxLogits.fc = nn.Linear(num_ftrs, num_classes)
+        # Handle the primary net
+        num_ftrs = model_ft.fc.in_features
+        model_ft.fc = nn.Linear(num_ftrs, num_classes)
+        input_size = 299
+
+    else:
+        print("Invalid model name, exiting...")
+        exit()
+
+    return model_ft, input_size
 
 
 class MILdataset(Dataset):
@@ -186,22 +274,19 @@ class Lite(LightningLite):
         print(args)
 
         self.seed_everything(2022)
-        # model_name = "resnet34"
         model_name = args.model_name
         sample_rate = args.sample_rate
-        ckpt_path = os.path.join(args.model_path, f'{args.model_name}_bs{args.batch_size}_lr{args.learning_rate}')
-        ckpt_file_path = glob.glob(os.path.join(ckpt_path,'*.ckpt'))[0]
-        model = MSI_MSS_Module.load_from_checkpoint(ckpt_file_path)
-        # model = models.resnet34(pretrained=True)
-        # model.fc = nn.Linear(model.fc.in_features, 2)
-
+        # ckpt_path = os.path.join(args.model_path, f'{args.model_name}_bs{args.batch_size}_lr{args.learning_rate}')
+        # ckpt_file_path = glob.glob(os.path.join(ckpt_path,'*.ckpt'))[0]
+        # model = MSI_MSS_Module.load_from_checkpoint(ckpt_file_path)
+        model,_ = initialize_model(model_name, 2, feature_extract=False, use_pretrained=True)
         optimizer = torch.optim.AdamW(
             model.parameters(), lr=args.learning_rate, weight_decay=1e-4)
         if args.weights == 0.5:
-            criterion = nn.CrossEntropyLoss()
+            criterion = nn.CrossEntropyLoss().cuda()
         else:
             w = torch.Tensor([1-args.weights, args.weights])
-            criterion = nn.CrossEntropyLoss(w)
+            criterion = nn.CrossEntropyLoss(w).cuda()
         # Scale model and optimizers
         model, optimizer = self.setup(model, optimizer, move_to_device=True)
 
@@ -230,20 +315,20 @@ class Lite(LightningLite):
         val_dataloader = DataLoader(val_dataset, batch_size=args.batch_size,
                                     shuffle=False, num_workers=args.num_workers, pin_memory=True)
         test_dataloader = DataLoader(test_dataset, batch_size=args.batch_size,
-                                     shuffle=False, num_workers=args.num_workers, pin_memory=False)
+                                     shuffle=False, num_workers=args.num_workers, pin_memory=True)
         train_dataloader, val_dataloader, test_dataloader = self.setup_dataloaders(
             train_dataloader, val_dataloader, test_dataloader, move_to_device=True)
 
         # open output file
-        version_name = f'MIL_{model_name}_bs{args.batch_size}_w{args.weights}_k{args.k}_output'
+        version_name = f'MIL_raw_{model_name}_bs{args.batch_size}_lr{args.learning_rate}_w{args.weights}_k{args.k}_output'
         # logger
-        writer = SummaryWriter(
-            f'saved_models/ConvNets/{model_name}/{version_name}')
+        output_path = os.path.join(args.output_path,version_name)
+        writer = SummaryWriter(output_path)
 
         for epoch in tqdm(range(args.nepochs)):
             train_dataset.setmode(1)
             # print("train_set_len:", len(train_dataloader.dataset))
-            probs = inference(epoch, train_dataloader, model)
+            probs = inference(train_dataloader, model)
             # return the indices of topk tile(s) in each slides
             topk = group_argtopk(
                 np.array(train_dataset.slideIDX), probs, args.k)
@@ -264,13 +349,13 @@ class Lite(LightningLite):
             train_loss = running_loss/len(train_dataloader.dataset)
             print(
                 'Training\tEpoch: [{}/{}]\tLoss: {}'.format(epoch+1, args.nepochs, train_loss))
-            writer.add_scalar('training loss', train_loss, epoch+1)
+            writer.add_scalar('train_loss', train_loss, epoch+1)
 
 
             # Validation
             if (epoch+1) % args.test_every == 0:
                 val_dataset.setmode(1)
-                probs = inference(epoch, val_dataloader, model)
+                probs = inference(val_dataloader, model)
                 maxs = group_max(np.array(val_dataset.slideIDX),
                                  probs, len(val_dataset.targets))
                 pred = [1 if x >= 0.5 else 0 for x in probs]
@@ -279,7 +364,7 @@ class Lite(LightningLite):
                 print('Validation\tEpoch: [{}/{}]\t ACC: {}\tError: {}\tFPR: {}\tFNR: {}'.format(
                     epoch+1, args.nepochs, val_acc, err, fpr, fnr))
 
-                writer.add_scalar('val_loss', val_acc, epoch+1)
+                writer.add_scalar('val_acc', val_acc, epoch+1)
                 writer.add_scalar('fpr', fpr, epoch+1)
                 writer.add_scalar('fnr', fnr, epoch+1)
 
@@ -293,46 +378,64 @@ class Lite(LightningLite):
                         'best_acc': best_acc,
                         'optimizer': optimizer.state_dict()
                     }
-                    torch.save(obj, os.path.join(
-                        f'saved_models/ConvNets/{model_name}/{version_name}', 'checkpoint_best.pth'))
+                    torch.save(obj, os.path.join(output_path, f'checkpoint_best.pth'))
 
         # test
-        ch = torch.load(os.path.join(ckpt_path, 'MIL_best_model.pth'))
+        ch = torch.load(os.path.join(output_path,'checkpoint_best.pth'))
+        # load params
         model.load_state_dict(ch['state_dict'])
         model = model.cuda()
         cudnn.benchmark = True
+        train_dataset.setmode(1)
+        val_dataset.setmode(1)
         test_dataset.setmode(1)
-        probs = inference(0, test_dataloader, model)
-        maxs = group_max(np.array(test_dataset.slideIDX),
-                         probs, len(test_dataset.targets))
+
+        # Train
+        probs = inference(train_dataloader, model)
+        maxs = group_max(np.array(train_dataset.slideIDX), probs, len(train_dataset.targets))
+        fp = open(os.path.join(output_path, f'Train_{version_name}.csv'), 'w')
+        fp.write('slides,tiles,target,prediction,probability\n')
+        for slides, tiles, target, prob in zip(train_dataset.slidenames, train_dataset.grid, train_dataset.targets, probs):
+            fp.write('{},{},{},{},{}\n'.format(slides, tiles, target, int(prob>=0.5), prob))
+        fp.close()
+
+        # Val
+        probs = inference(val_dataloader, model)
+        maxs = group_max(np.array(val_dataset.slideIDX), probs, len(val_dataset.targets))
+        fp = open(os.path.join(output_path, f'Val_{version_name}.csv'), 'w')
+        fp.write('slides,tiles,target,prediction,probability\n')
+        for slides, tiles, target, prob in zip(val_dataset.slidenames, val_dataset.grid, val_dataset.targets, probs):
+            fp.write('{},{},{},{},{}\n'.format(slides, tiles, target, int(prob>=0.5), prob))
+        fp.close()
+
+        # Test
+        probs = inference(test_dataloader, model)
+        maxs = group_max(np.array(test_dataset.slideIDX), probs, len(test_dataset.targets))
+        fp = open(os.path.join(output_path, f'Test_{version_name}.csv'), 'w')
+        fp.write('slides,tiles,target,prediction,probability\n')
+        for slides, tiles, target, prob in zip(test_dataset.slidenames, test_dataset.grid, test_dataset.targets, probs):
+            fp.write('{},{},{},{},{}\n'.format(slides, tiles, target, int(prob>=0.5), prob))
+        fp.close()   
+
         pred = [1 if x >= 0.5 else 0 for x in probs]
         test_acc, err, fnr, fpr = calc_err(pred, test_dataset.targets)
-        writer.add_scalar('test acc', test_acc)
-        # fp = open(os.path.join(
-        #     f'saved_models/ConvNets/{model_name}/{version_name}', f'{version_name}.csv'), 'w')
-        # fp.write('slides,tiles,target,prediction,probability\n')
-        # for slides, tiles, target, prob in zip(test_dataset.slidenames, test_dataset.grid, test_dataset.targets, probs):
-        #     fp.write('{},{},{},{},{}\n'.format(slides, tiles, target, int(prob >= 0.5), prob))
-        # fp.close()
+        test_f1_score = f1_score(test_dataset.targets, pred, average='binary')
+
+        try:
+            test_auroc_score = roc_auc_score(test_dataset.targets, probs)
+            writer.add_scalar("test_auroc_score", test_auroc_score)
+        except ValueError:
+            writer.add_scalar('test_auroc_score', .0)
+
+        writer.add_scalar('test_f1_score', test_f1_score)    
+        writer.add_scalar('test_acc', test_acc)
+
+
+
 
 
 def main(args):
     Lite(devices="auto", accelerator="auto").run(args)
-
-class Args:
-    root_dir = '/Users/gaskell/Dropbox/Mac/Desktop/CBH/ex_data/CRC_DX_data_set/Dataset'
-    lib_dir = '/Users/gaskell/Dropbox/Mac/Desktop/CBH/ex_data/CRC_DX_data_set/CRC_DX_Lib'
-    model_path = '/Users/gaskell/Dropbox/Mac/Desktop/CBH/saved_models/ConvNets'
-    output_path = '/Users/gaskell/Dropbox/Mac/Desktop/CBH/ex_data/CRC_DX_data_set/Output'
-    model_name = 'resnet18'
-    sample_rate = 0.01
-    batch_size = 64
-    learning_rate = 1e-3
-    nepochs = 1
-    num_workers = 2
-    test_every = 1
-    weights = 0.5
-    k = 1
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -421,6 +524,5 @@ if __name__ == "__main__":
         help="top k tiles are assumed to be of the same class as the slide (default: 1, standard MIL)",
     )
     
-    # args = parser.parse_args()
-    args = Args()
+    args = parser.parse_args()
     main(args)

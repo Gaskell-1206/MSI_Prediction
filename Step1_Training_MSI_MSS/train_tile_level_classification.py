@@ -393,7 +393,7 @@ def main(args):
             transforms.ToPILImage(),
             transforms.ToTensor(),
             transforms.RandomHorizontalFlip(),
-            # transforms.RandomResizedCrop(196),
+            transforms.RandomResizedCrop(196),
             transforms.Resize(299),
             transforms.Normalize(DATA_MEANS, DATA_STD)])
         
@@ -415,7 +415,7 @@ def main(args):
     model_name = args.model_name
     model_hparams = {"num_classes": 2, "act_fn_name": "relu"}
     optimizer_name = "Adam",
-    optimizer_hparams = {"lr": args.learning_rate, "weight_decay": 1e-5},
+    optimizer_hparams = {"lr": args.learning_rate, "weight_decay": 1e-4},
     model = MSI_MSS_Module(model_name, model_hparams,
                           optimizer_name, optimizer_hparams)
 

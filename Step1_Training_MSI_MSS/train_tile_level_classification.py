@@ -1,3 +1,6 @@
+# Run training on tile_level classificaiton
+# Author: Shengjia Chen
+
 import argparse
 import os
 import random

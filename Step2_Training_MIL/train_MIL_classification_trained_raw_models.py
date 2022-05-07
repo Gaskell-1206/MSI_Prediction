@@ -1,3 +1,9 @@
+# Run MIL classification use raw CNN models
+# Reference: 1.Campanella, G. et al. Clinical-grade computational pathology using weakly supervised
+#            deep learning on whole slide images. Nat Med 25, 1301–1309 (2019).
+#            doi:10.1038/s41591-019-0508-1. Available from http://www.nature.com/articles/s41591-019-0508-1
+#            The source codes of the referenced paper available at https://github.com/MSKCC-Computational-Pathology/MIL-nature-medicine-2019
+# This code was modified by Shengjia Chen for our work.
 import argparse
 import os
 import random

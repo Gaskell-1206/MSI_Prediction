@@ -1,5 +1,13 @@
 # MSI_vs_MSS_Classification
 
+## Installation
+
+To use this package, install the required python packages (tested with python 3.8 on macOS Monterey):
+
+```bash
+pip install -r requirements.txt
+```
+
 ## Dataset
 
 Training images for MSI detection are obtained from the published paper: Kather, Jakob Nikolas, et al. "Deep learning can predict microsatellite instability directly from histology in gastrointestinal cancer." Nature medicine 25.7 (2019): 1054-1056. They are available at https://doi.org/10.5281/zenodo.2530835.

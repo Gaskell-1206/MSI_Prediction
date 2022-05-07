@@ -178,7 +178,6 @@ class MSI_MSS_Module(pl.LightningModule):
         imgs, labels = batch
         preds = self.model(imgs)
         loss = self.loss_module(preds, labels.long())
-        # self.train_acc(preds, labels)
         acc = (preds.argmax(dim=-1) == labels).float().mean()
         # Logs the accuracy per epoch to tensorboard (weighted average over batches)
         self.log("train_acc", acc, on_step=False, on_epoch=True)
@@ -190,7 +189,6 @@ class MSI_MSS_Module(pl.LightningModule):
         probs = F.softmax(self.model(imgs), dim=1)
         preds = probs.argmax(dim=-1)
         acc = (labels == preds).float().mean()
-        # self.valid_acc(probs, labels)
         # By default logs it per epoch (weighted average over batches)
         self.log("val_acc", acc, on_step=False, on_epoch=True)
         return probs.cpu()[:, 1], preds.cpu(), labels.cpu()
@@ -207,15 +205,6 @@ class MSI_MSS_Module(pl.LightningModule):
         except ValueError:
             self.log("val_auroc_score", .0, on_step=False, on_epoch=True)
         self.log("val_f1_score", val_f1_score, on_step=False, on_epoch=True)
-        # save y_true, y_pred for use
-        # test_temp = pd.read_csv('/gpfs/scratch/sc9295/digPath/CRC_DX_data_set/CRC_DX_Lib/Test_temporary.csv')
-        # version_name = f'Binary_Test_{self.hparams.model_name}_bs{args.batch_size}_lr{args.learning_rate}_output'
-        # fp = open(os.path.join(
-        #     f'saved_models/ConvNets/{self.hparams.model_name}', f'{version_name}.csv'), 'w')
-        # fp.write('target,prediction,probability\n')
-        # for slides, tiles, target, pred, prob in zip(test_temp['subject_id'],test_temp['slice_id'],y_true, y_pred, y_prob):
-        #     fp.write('{},{},{},{},{}\n'.format(slides, tiles, int(target), pred, prob))
-        # fp.close()
 
     def test_step(self, batch, batch_idx):
         imgs, labels = batch
